@@ -212,7 +212,7 @@ export function renderReadReceiptUI() {
 
 /**
  * 읽씹 연출 실행
- * ({{user}}가 {{char}}에게 보낸 메시지를 {{char}}가 읽었지만 답장하지 않는 상황)
+ * ({{char}}가 유저에게 보낸 메시지를 유저가 읽었지만 답장하지 않는 상황)
  */
 async function handleReadReceipt() {
     const ctx = getContext();
@@ -222,7 +222,7 @@ async function handleReadReceipt() {
         const tmpl = getExtensionSettings()?.['st-lifesim']?.messageTemplates?.readReceipt;
         const prompt = tmpl
             ? tmpl.replace(/\{charName\}/g, charName)
-            : `{{user}} sent ${charName} a message. ${charName} has read {{user}}'s message but has not replied yet. Briefly describe ${charName}'s reaction in 1-2 sentences.`;
+            : `${charName} sent {{user}} a message. {{user}} has read ${charName}'s message but has not replied yet. Briefly describe ${charName}'s reaction in 1-2 sentences.`;
         await slashGen(prompt, charName);
         showToast('읽씹 연출 완료', 'success', 1500);
     } catch (e) {
@@ -348,12 +348,11 @@ async function generateEvent(category) {
 
     try {
         if (ctx && typeof ctx.generateQuietPrompt === 'function') {
-            const titlePrompt = `Generate a SHORT title (under 10 words, in Korean) for an unexpected "${category}" category event that fits naturally into the current story context. Return ONLY the title text, nothing else.`;
+            const titlePrompt = `Generate a SHORT title (under 10 words) for an unexpected "${category}" category event that fits naturally into the current story context. Return ONLY the title text, nothing else.`;
             const titleResult = await ctx.generateQuietPrompt({ quietPrompt: titlePrompt, quietName: '이벤트' });
             if (titleResult) eventTitle = titleResult.trim();
 
-            const contentPrompt = `사건 카테고리: "${category}", 사건 제목: "${eventTitle}". 현재 상황에 맞는 사건 내용을 한국어 2~4문장으로 작성하세요.
-- 반드시 한국어만 사용하세요.
+            const contentPrompt = `사건 카테고리: "${category}", 사건 제목: "${eventTitle}". 현재 상황에 맞는 사건 내용을 2~4문장으로 작성하세요.
 - 출력은 사건 설명 본문만 작성하세요.
 - 해당 요청은 user와 char 사이의 메시지 주고받기를 더 재미있게 변화구를 주기 위한 것입니다.
 - "현실에서 만나게 된다" 등 메신저 형식의 룰을 깨뜨리려는 내용은 일체 금지합니다.
