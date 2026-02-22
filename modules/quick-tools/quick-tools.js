@@ -13,6 +13,7 @@ import { getContext } from '../../utils/st-context.js';
 import { slashSend, slashGen, slashSendAs } from '../../utils/slash.js';
 import { showToast, escapeHtml, generateId } from '../../utils/ui.js';
 import { loadData, saveData, getExtensionSettings } from '../../utils/storage.js';
+import { getAppearanceTagsByName } from '../contacts/contacts.js';
 
 // 사건 기록 아카이브 저장 키
 const ARCHIVE_KEY = 'event-archive';
@@ -608,8 +609,11 @@ async function generateUserImage(prompt) {
             console.warn('[ST-LifeSim] 이미지 생성: 컨텍스트를 가져올 수 없습니다.');
             return '';
         }
+        const userName = ctx?.name1 || '';
+        const userAppearanceTags = getAppearanceTagsByName(userName) || getAppearanceTagsByName('{{user}}') || getExtensionSettings()?.['st-lifesim']?.characterAppearanceTags?.['{{user}}'] || '';
+        const finalPrompt = userAppearanceTags ? `${prompt.trim()}, ${String(userAppearanceTags).trim()}` : prompt.trim();
         if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
-            const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${prompt}`, { showOutput: false });
+            const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${finalPrompt}`, { showOutput: false });
             // result.pipe: 신규 SillyTavern API 반환값, result: 구버전 폴백
             const resultStr = String(result?.pipe || result || '').trim();
             if (resultStr && (resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:'))) {

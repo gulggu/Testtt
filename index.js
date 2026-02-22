@@ -34,6 +34,7 @@ const SETTINGS_KEY = 'st-lifesim';
 
 // 주간/야간 테마 저장 키 (localStorage)
 const THEME_STORAGE_KEY = 'st-lifesim:forced-theme';
+const THEME_MODE_PRESETS_KEY = 'st-lifesim:theme-mode-presets';
 const ALWAYS_ON_MODULES = new Set(['quickTools', 'contacts']);
 const AI_ROUTE_DEFAULTS = {
     api: '',
@@ -108,7 +109,7 @@ const DEFAULT_SETTINGS = {
     snsImageMode: false, // SNS 게시물 이미지 자동 생성 여부
     messageImageGenerationMode: false, // 메신저 이미지 자동 생성 여부 (ON: 이미지 API로 생성, OFF: 줄글 텍스트)
     messageImageTextTemplate: '[사진: {description}]', // OFF일 때 줄글 형식 커스텀 템플릿
-    messageImageInjectionPrompt: '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation (e.g., selfie, scenery, food, screenshot, etc.), insert a <pic prompt="image description in English for stable diffusion"> tag at that point in your response.\nOnly insert when it makes contextual sense. The prompt should describe the image visually.\n</image_generation_rule>',
+    messageImageInjectionPrompt: '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation (e.g., selfie, scenery, food, screenshot, etc.), insert a <pic prompt="image description in English for stable diffusion"> tag at that point in your response.\nRules:\n1) Default subject is {{char}} only.\n2) Include {{user}} only when the context explicitly says both are together or the photo is clearly about {{user}}.\n3) Do not mix appearance traits of multiple people unless the scene explicitly includes multiple people.\n4) Keep the prompt visual and concise.\n</image_generation_rule>',
     snsImagePrompt: 'Create a photorealistic image for {authorName}\'s SNS post. Character appearance: {appearanceTags}. Post content: "{postContent}". The image must accurately depict the scene described in the post. Focus on matching the subject, setting, and mood of the post text. Style: casual daily-life smartphone photo, natural lighting, candid feel.',
     messageImagePrompt: 'Generate a photorealistic image that {charName} would send via messenger. Character appearance: {appearanceTags}. The image must reflect the character\'s physical appearance accurately based on the appearance tags. Style: personal candid photo matching the conversation context, natural and authentic feel.',
     characterAppearanceTags: {}, // { [charName]: "tag1, tag2" }
@@ -1195,6 +1196,72 @@ function openSettingsPanel(onBack) {
         desc.textContent = '컬러 피커로 ST-LifeSim UI 색상을 자유롭게 변경하세요. 변경 즉시 적용됩니다.';
         wrapper.appendChild(desc);
 
+        const modePresetGroup = document.createElement('div');
+        modePresetGroup.className = 'slm-form-group';
+        modePresetGroup.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '🌓 주간/야간 모드 프리셋' }));
+        const modePresetRow = document.createElement('div');
+        modePresetRow.className = 'slm-input-row';
+        const modePresetSaveBtn = document.createElement('button');
+        modePresetSaveBtn.className = 'slm-btn slm-btn-secondary slm-btn-sm';
+        modePresetSaveBtn.textContent = '💾 저장';
+        const modePresetSelect = document.createElement('select');
+        modePresetSelect.className = 'slm-select';
+        modePresetSelect.style.flex = '1';
+        const modePresetLoadBtn = document.createElement('button');
+        modePresetLoadBtn.className = 'slm-btn slm-btn-primary slm-btn-sm';
+        modePresetLoadBtn.textContent = '📂 불러오기';
+        const modePresetDeleteBtn = document.createElement('button');
+        modePresetDeleteBtn.className = 'slm-btn slm-btn-danger slm-btn-sm';
+        modePresetDeleteBtn.textContent = '🗑️';
+        modePresetDeleteBtn.title = '선택된 프리셋 삭제';
+        const loadThemeModePresets = () => {
+            const raw = localStorage.getItem(THEME_MODE_PRESETS_KEY) || '{}';
+            try { return JSON.parse(raw); } catch (e) {
+                console.warn('[ST-LifeSim] 테마 모드 프리셋 파싱 실패:', e, raw);
+                return {};
+            }
+        };
+        const refreshModePresetList = () => {
+            modePresetSelect.innerHTML = '';
+            modePresetSelect.appendChild(Object.assign(document.createElement('option'), { value: '', textContent: '-- 모드 프리셋 --' }));
+            const presets = loadThemeModePresets();
+            Object.keys(presets).forEach((name) => {
+                modePresetSelect.appendChild(Object.assign(document.createElement('option'), { value: name, textContent: name }));
+            });
+        };
+        modePresetSaveBtn.onclick = () => {
+            const presetName = prompt('주간/야간 모드 프리셋 이름:');
+            if (!presetName) return;
+            const mode = getEffectiveTheme();
+            const presets = loadThemeModePresets();
+            presets[presetName] = mode;
+            localStorage.setItem(THEME_MODE_PRESETS_KEY, JSON.stringify(presets));
+            refreshModePresetList();
+            modePresetSelect.value = presetName;
+            showToast(`"${presetName}" 저장됨 (${mode === 'light' ? '주간' : '야간'})`, 'success', 1500);
+        };
+        modePresetLoadBtn.onclick = () => {
+            const name = modePresetSelect.value;
+            if (!name) { showToast('프리셋을 선택하세요.', 'warn'); return; }
+            const mode = loadThemeModePresets()[name];
+            if (mode !== 'light' && mode !== 'dark') { showToast('프리셋을 찾을 수 없습니다.', 'error'); return; }
+            applyForcedTheme(mode);
+            showToast(`프리셋 "${name}" 적용됨`, 'success', 1500);
+        };
+        modePresetDeleteBtn.onclick = () => {
+            const name = modePresetSelect.value;
+            if (!name) return;
+            const presets = loadThemeModePresets();
+            delete presets[name];
+            localStorage.setItem(THEME_MODE_PRESETS_KEY, JSON.stringify(presets));
+            refreshModePresetList();
+            showToast(`프리셋 "${name}" 삭제됨`, 'success', 1200);
+        };
+        refreshModePresetList();
+        modePresetRow.append(modePresetSaveBtn, modePresetSelect, modePresetLoadBtn, modePresetDeleteBtn);
+        modePresetGroup.appendChild(modePresetRow);
+        wrapper.appendChild(modePresetGroup);
+
         if (!settings.themeColors) settings.themeColors = {};
 
         const colorDefs = [
@@ -1779,7 +1846,7 @@ const PIC_TAG_REGEX = /<pic\s[^>]*?prompt="([^"]*)"[^>]*?\/?>/gi;
  * OFF: 주입을 제거하여 AI가 <pic> 태그를 출력하지 않도록 한다
  */
 // OFF 모드 이미지 프롬프트 — AI가 사진 상황을 <pic> 태그로 표시하되, 실제 생성은 하지 않음
-const MSG_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation (e.g., selfie, scenery, food, screenshot, etc.), insert a <pic prompt="image description in Korean for the photo situation"> tag at that point in your response.\nOnly insert when it makes contextual sense. The prompt should describe the image situation briefly.\n</image_generation_rule>';
+const MSG_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation (e.g., selfie, scenery, food, screenshot, etc.), insert a <pic prompt="image description in Korean for the photo situation"> tag at that point in your response.\nRules:\n1) Default subject is {{char}} only.\n2) Include {{user}} only when context explicitly indicates both are together or the photo is focused on {{user}}.\n3) Do not mix unrelated character appearance traits.\n4) Keep the situation brief and visual.\n</image_generation_rule>';
 
 function updateMessageImageInjection() {
     const ctx = getContext();
@@ -1850,8 +1917,11 @@ async function applyCharacterImageDisplayMode() {
         const appearanceTags = getAppearanceTagsByName(charName) || settings.characterAppearanceTags?.[charName] || '';
         const userName = ctx?.name1 || '';
         const userAppearanceTags = getAppearanceTagsByName(userName) || settings.characterAppearanceTags?.['{{user}}'] || '';
-        // 셀카/유저 사진 감지용 패턴
-        const userSelfieRe = /selfie|셀[카피]|셀[카피]|self[- ]?shot|my (photo|picture|face)|내 (사진|얼굴)|유저|user/i;
+        const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const userNameRegex = userName ? new RegExp(escapeRegex(userName.toLowerCase())) : null;
+        const charNameRegex = charName ? new RegExp(escapeRegex(charName.toLowerCase())) : null;
+        const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
+        const charHintRegex = /\bchar\b|{{char}}|캐릭터/;
         for (const match of picMatches) {
             const fullTag = match[0];
             const rawPrompt = (match[1] || '').trim();
@@ -1860,9 +1930,18 @@ async function applyCharacterImageDisplayMode() {
                 replacements.push({ index: matchIndex, length: fullTag.length, replacement: '' });
                 continue;
             }
-            // 유저 셀카/사진인 경우 user 외관 태그를 주입, 아닌 경우 char 외관 태그 주입
-            const isUserPhoto = userSelfieRe.test(rawPrompt) || (userName && rawPrompt.toLowerCase().includes(userName.toLowerCase()));
-            const tagsToUse = isUserPhoto ? userAppearanceTags : appearanceTags;
+            const promptLower = rawPrompt.toLowerCase();
+            const mentionsUser = userHintRegex.test(promptLower)
+                || (!!userNameRegex && userNameRegex.test(promptLower));
+            const mentionsChar = charHintRegex.test(promptLower)
+                || (!!charNameRegex && charNameRegex.test(promptLower));
+            const tags = [];
+            if (mentionsUser && !mentionsChar && userAppearanceTags) tags.push(userAppearanceTags);
+            else {
+                if (appearanceTags) tags.push(appearanceTags);
+                if (mentionsUser && userAppearanceTags) tags.push(userAppearanceTags);
+            }
+            const tagsToUse = tags.join(', ');
             const prompt = tagsToUse ? `${rawPrompt}, ${tagsToUse}` : rawPrompt;
             let replacement;
             try {
