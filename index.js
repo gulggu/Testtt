@@ -22,7 +22,7 @@ import { exportAllData, importAllData, clearAllData } from './utils/storage.js';
 import { injectQuickSendButton, renderTimeDividerUI, renderReadReceiptUI, renderNoContactUI, renderEventGeneratorUI, renderVoiceMemoUI } from './modules/quick-tools/quick-tools.js';
 import { startFirstMsgTimer, renderFirstMsgSettingsUI } from './modules/firstmsg/firstmsg.js';
 import { initEmoticon, openEmoticonPopup } from './modules/emoticon/emoticon.js';
-import { initContacts, openContactsPopup } from './modules/contacts/contacts.js';
+import { initContacts, openContactsPopup, getAppearanceTagsByName } from './modules/contacts/contacts.js';
 import { initCall, onCharacterMessageRenderedForProactiveCall, openCallLogsPopup, triggerProactiveIncomingCall } from './modules/call/call.js';
 import { initWallet, openWalletPopup } from './modules/wallet/wallet.js';
 import { initSns, openSnsPopup, triggerNpcPosting, triggerPendingCommentReaction, hasPendingCommentReaction } from './modules/sns/sns.js';
@@ -82,7 +82,7 @@ const DEFAULT_MESSAGE_TEMPLATES = {
     callEnd: '📵 통화 종료 (통화시간: {timeStr})',
     voiceMemo: '🎤 음성메시지 ({timeStr})<br>{hint}',
     voiceMemoAiPrompt: 'As {charName}, send exactly one voice message in Korean. You must choose suitable duration and content yourself based on current context.\nOutput only this HTML format:\n🎤 음성메시지 (M:SS)<br>[actual voice message content]',
-    readReceipt: '{{user}} sent {charName} a message. {charName} has read {{user}}\'s message but has not replied yet. Briefly describe {charName}\'s reaction in 1-2 sentences.',
+    readReceipt: '{charName} sent a message to {{user}}. {{user}} has read {charName}\'s message but has not replied yet. Briefly describe {charName}\'s reaction in 1-2 sentences as dialogue.',
     noContact: '{charName} tried to reach {{user}} but {{user}} has not seen or responded yet. Briefly describe the situation in 1-2 sentences.',
     gifticonSend: '{emoji} **기프티콘 전송 완료**\n- 보내는 사람: {senderName}\n- 받는 사람: {recipient}\n- 품목: {name}{valuePart}{memoPart}',
 };
@@ -109,8 +109,8 @@ const DEFAULT_SETTINGS = {
     messageImageGenerationMode: false, // 메신저 이미지 자동 생성 여부 (ON: 이미지 API로 생성, OFF: 줄글 텍스트)
     messageImageTextTemplate: '[사진: {description}]', // OFF일 때 줄글 형식 커스텀 템플릿
     messageImageInjectionPrompt: '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation (e.g., selfie, scenery, food, screenshot, etc.), insert a <pic prompt="image description in English for stable diffusion"> tag at that point in your response.\nOnly insert when it makes contextual sense. The prompt should describe the image visually.\n</image_generation_rule>',
-    snsImagePrompt: 'Create a photo for {authorName}\'s SNS post. Appearance: {appearanceTags}. Scene should match the post content naturally. Photorealistic, casual daily life style.',
-    messageImagePrompt: 'Generate an image that {charName} would send via messenger. Appearance: {appearanceTags}. The image should feel personal and candid, matching the conversation context.',
+    snsImagePrompt: 'Create a photorealistic image for {authorName}\'s SNS post. Character appearance: {appearanceTags}. Post content: "{postContent}". The image must accurately depict the scene described in the post. Focus on matching the subject, setting, and mood of the post text. Style: casual daily-life smartphone photo, natural lighting, candid feel.',
+    messageImagePrompt: 'Generate a photorealistic image that {charName} would send via messenger. Character appearance: {appearanceTags}. The image must reflect the character\'s physical appearance accurately based on the appearance tags. Style: personal candid photo matching the conversation context, natural and authentic feel.',
     characterAppearanceTags: {}, // { [charName]: "tag1, tag2" }
     callAudio: {
         startSoundUrl: '',
@@ -647,6 +647,8 @@ function openSettingsPanel(onBack) {
     // 탭 3: 이모티콘 & SNS 설정
     // ─────────────────────────────────────────
     function buildMediaTab() {
+        // ── 서브 탭 1: 이미지/이모티콘 설정 ──
+        function buildImageSubTab() {
         const wrapper = document.createElement('div');
         wrapper.className = 'slm-settings-wrapper slm-form';
 
@@ -841,6 +843,14 @@ function openSettingsPanel(onBack) {
         injectionPromptGroup.appendChild(injectionPromptResetBtn);
         wrapper.appendChild(injectionPromptGroup);
 
+        return wrapper;
+        }
+
+        // ── 서브 탭 2: 이미지 프롬프트/외관 태그 ──
+        function buildPromptSubTab() {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'slm-settings-wrapper slm-form';
+
         const snsImagePromptGroup = document.createElement('div');
         snsImagePromptGroup.className = 'slm-form-group';
         snsImagePromptGroup.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '📸 SNS 이미지 프롬프트 (커스텀)' }));
@@ -848,7 +858,7 @@ function openSettingsPanel(onBack) {
         snsImagePromptInput.className = 'slm-textarea';
         snsImagePromptInput.rows = 3;
         snsImagePromptInput.placeholder = '예: {authorName}의 외형 태그 {appearanceTags}를 반영해 SNS 사진 설명 프롬프트를 작성';
-        snsImagePromptInput.value = settings.snsImagePrompt || '';
+        snsImagePromptInput.value = settings.snsImagePrompt || DEFAULT_SETTINGS.snsImagePrompt;
         snsImagePromptInput.oninput = () => { settings.snsImagePrompt = snsImagePromptInput.value; saveSettings(); };
         snsImagePromptGroup.appendChild(snsImagePromptInput);
         const snsImagePromptResetBtn = document.createElement('button');
@@ -869,7 +879,7 @@ function openSettingsPanel(onBack) {
         messageImagePromptInput.className = 'slm-textarea';
         messageImagePromptInput.rows = 3;
         messageImagePromptInput.placeholder = '예: {charName}가 보낸 이미지의 묘사를 생성할 때 사용할 프롬프트';
-        messageImagePromptInput.value = settings.messageImagePrompt || '';
+        messageImagePromptInput.value = settings.messageImagePrompt || DEFAULT_SETTINGS.messageImagePrompt;
         messageImagePromptInput.oninput = () => { settings.messageImagePrompt = messageImagePromptInput.value; saveSettings(); };
         messageImagePromptGroup.appendChild(messageImagePromptInput);
         const messageImagePromptResetBtn = document.createElement('button');
@@ -883,45 +893,28 @@ function openSettingsPanel(onBack) {
         messageImagePromptGroup.appendChild(messageImagePromptResetBtn);
         wrapper.appendChild(messageImagePromptGroup);
 
-        const ctx = getContext();
-        const currentCharName = ctx?.name2 || '';
-        if (currentCharName) {
-            const appearanceGroup = document.createElement('div');
-            appearanceGroup.className = 'slm-form-group';
-            appearanceGroup.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: `🏷️ ${currentCharName} 외관 태그 바인딩` }));
-            const appearanceInput = document.createElement('input');
-            appearanceInput.className = 'slm-input';
-            appearanceInput.type = 'text';
-            appearanceInput.placeholder = '예: long hair, school uniform, warm smile';
-            appearanceInput.value = settings.characterAppearanceTags?.[currentCharName] || '';
-            appearanceInput.oninput = () => {
-                if (!settings.characterAppearanceTags || typeof settings.characterAppearanceTags !== 'object') settings.characterAppearanceTags = {};
-                settings.characterAppearanceTags[currentCharName] = appearanceInput.value.trim();
-                saveSettings();
-            };
-            appearanceGroup.appendChild(appearanceInput);
-            wrapper.appendChild(appearanceGroup);
+        // 외관 태그 안내 (연락처 탭으로 이동됨)
+        const appearanceNotice = document.createElement('div');
+        appearanceNotice.className = 'slm-form-group';
+        appearanceNotice.appendChild(Object.assign(document.createElement('label'), {
+            className: 'slm-label',
+            textContent: '🏷️ 외관 태그 설정',
+        }));
+        const noticeDesc = Object.assign(document.createElement('div'), {
+            className: 'slm-desc',
+            textContent: '각 캐릭터의 외관 태그는 📋 연락처 탭의 편집 화면에서 개별적으로 설정할 수 있습니다. 이미지 생성 시 해당 연락처의 외관 태그가 자동으로 적용됩니다.',
+        });
+        appearanceNotice.appendChild(noticeDesc);
+        wrapper.appendChild(appearanceNotice);
+
+        return wrapper;
         }
 
-        // {{user}} 외관 태그 바인딩
-        const userAppearanceGroup = document.createElement('div');
-        userAppearanceGroup.className = 'slm-form-group';
-        const userName = getContext()?.name1 || '{{user}}';
-        userAppearanceGroup.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: `🏷️ ${userName} (유저) 외관 태그 바인딩` }));
-        const userAppearanceInput = document.createElement('input');
-        userAppearanceInput.className = 'slm-input';
-        userAppearanceInput.type = 'text';
-        userAppearanceInput.placeholder = '예: short hair, casual outfit, glasses';
-        userAppearanceInput.value = settings.characterAppearanceTags?.['{{user}}'] || '';
-        userAppearanceInput.oninput = () => {
-            if (!settings.characterAppearanceTags || typeof settings.characterAppearanceTags !== 'object') settings.characterAppearanceTags = {};
-            settings.characterAppearanceTags['{{user}}'] = userAppearanceInput.value.trim();
-            saveSettings();
-        };
-        userAppearanceGroup.appendChild(userAppearanceInput);
-        wrapper.appendChild(userAppearanceGroup);
+        // ── 서브 탭 3: 통화 사운드/진동 ──
+        function buildSoundSubTab() {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'slm-settings-wrapper slm-form';
 
-        wrapper.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
         const callSoundTitle = Object.assign(document.createElement('div'), {
             className: 'slm-label',
             textContent: '🔊 통화 사운드/진동',
@@ -933,6 +926,8 @@ function openSettingsPanel(onBack) {
             { key: 'endSoundUrl', label: '통화 종료 사운드 URL' },
             { key: 'ringtoneUrl', label: '수신 착신음 URL' },
         ];
+        // 사운드 프리셋 저장/불러오기 (개별 등록 가능)
+        const soundInputs = {};
         callSoundDefs.forEach(({ key, label }) => {
             const group = document.createElement('div');
             group.className = 'slm-form-group';
@@ -949,6 +944,7 @@ function openSettingsPanel(onBack) {
                 settings.callAudio[key] = input.value.trim();
                 saveSettings();
             };
+            soundInputs[key] = input;
             const previewBtn = document.createElement('button');
             previewBtn.className = 'slm-btn slm-btn-ghost slm-btn-sm';
             previewBtn.textContent = '▶';
@@ -966,18 +962,86 @@ function openSettingsPanel(onBack) {
                     void previewAudio.play().catch(() => { showToast('재생 실패', 'error'); previewAudio = null; previewBtn.textContent = '▶'; });
                 } catch { showToast('재생 실패', 'error'); }
             };
+
+            // 개별 프리셋 저장/불러오기 버튼
+            const indivPresetSaveBtn = document.createElement('button');
+            indivPresetSaveBtn.className = 'slm-btn slm-btn-ghost slm-btn-sm';
+            indivPresetSaveBtn.textContent = '💾';
+            indivPresetSaveBtn.title = '이 사운드를 프리셋으로 저장';
+            indivPresetSaveBtn.onclick = () => {
+                const url = input.value.trim();
+                if (!url) { showToast('URL을 먼저 입력해주세요.', 'warn'); return; }
+                const presetName = prompt(`${label} 프리셋 이름:`);
+                if (!presetName) return;
+                const presets = JSON.parse(localStorage.getItem('st-lifesim:sound-presets-individual') || '{}');
+                if (!presets[key]) presets[key] = {};
+                presets[key][presetName] = url;
+                localStorage.setItem('st-lifesim:sound-presets-individual', JSON.stringify(presets));
+                showToast(`"${presetName}" 저장됨`, 'success', 1500);
+                refreshIndivPreset(key);
+            };
+
+            const indivPresetSelect = document.createElement('select');
+            indivPresetSelect.className = 'slm-select';
+            indivPresetSelect.style.flex = '1';
+            indivPresetSelect.style.maxWidth = '140px';
+
+            const refreshIndivPreset = (soundKey) => {
+                indivPresetSelect.innerHTML = '';
+                indivPresetSelect.appendChild(Object.assign(document.createElement('option'), { value: '', textContent: '-- 프리셋 --' }));
+                const presets = JSON.parse(localStorage.getItem('st-lifesim:sound-presets-individual') || '{}');
+                const entries = presets[soundKey] || {};
+                Object.keys(entries).forEach((name) => {
+                    indivPresetSelect.appendChild(Object.assign(document.createElement('option'), { value: name, textContent: name }));
+                });
+            };
+            refreshIndivPreset(key);
+
+            indivPresetSelect.onchange = () => {
+                const name = indivPresetSelect.value;
+                if (!name) return;
+                const presets = JSON.parse(localStorage.getItem('st-lifesim:sound-presets-individual') || '{}');
+                const url = presets[key]?.[name];
+                if (!url) return;
+                input.value = url;
+                if (!settings.callAudio || typeof settings.callAudio !== 'object') settings.callAudio = { ...DEFAULT_SETTINGS.callAudio };
+                settings.callAudio[key] = url;
+                saveSettings();
+                showToast(`"${name}" 적용됨`, 'success', 1200);
+            };
+
+            const indivPresetDelBtn = document.createElement('button');
+            indivPresetDelBtn.className = 'slm-btn slm-btn-danger slm-btn-sm';
+            indivPresetDelBtn.textContent = '🗑️';
+            indivPresetDelBtn.title = '선택된 프리셋 삭제';
+            indivPresetDelBtn.onclick = () => {
+                const name = indivPresetSelect.value;
+                if (!name) return;
+                const presets = JSON.parse(localStorage.getItem('st-lifesim:sound-presets-individual') || '{}');
+                if (presets[key]) { delete presets[key][name]; }
+                localStorage.setItem('st-lifesim:sound-presets-individual', JSON.stringify(presets));
+                refreshIndivPreset(key);
+                showToast(`"${name}" 삭제됨`, 'success', 1200);
+            };
+
             inputRow.append(input, previewBtn);
             group.appendChild(inputRow);
+
+            const indivPresetRow = document.createElement('div');
+            indivPresetRow.className = 'slm-input-row';
+            indivPresetRow.style.marginTop = '4px';
+            indivPresetRow.append(indivPresetSaveBtn, indivPresetSelect, indivPresetDelBtn);
+            group.appendChild(indivPresetRow);
             wrapper.appendChild(group);
         });
 
-        // 사운드 프리셋 저장/불러오기
+        // 세트 프리셋 저장/불러오기 (기존 호환)
         const presetRow = document.createElement('div');
         presetRow.className = 'slm-btn-row';
         presetRow.style.marginTop = '8px';
         const presetSaveBtn = document.createElement('button');
         presetSaveBtn.className = 'slm-btn slm-btn-secondary slm-btn-sm';
-        presetSaveBtn.textContent = '💾 프리셋 저장';
+        presetSaveBtn.textContent = '💾 세트 프리셋 저장';
         presetSaveBtn.onclick = () => {
             const presetName = prompt('프리셋 이름을 입력하세요:');
             if (!presetName) return;
@@ -996,7 +1060,7 @@ function openSettingsPanel(onBack) {
         presetLoadSelect.style.flex = '1';
         const refreshPresetList = () => {
             presetLoadSelect.innerHTML = '';
-            presetLoadSelect.appendChild(Object.assign(document.createElement('option'), { value: '', textContent: '-- 프리셋 선택 --' }));
+            presetLoadSelect.appendChild(Object.assign(document.createElement('option'), { value: '', textContent: '-- 세트 프리셋 선택 --' }));
             const presets = JSON.parse(localStorage.getItem('st-lifesim:sound-presets') || '{}');
             Object.keys(presets).forEach((name) => {
                 presetLoadSelect.appendChild(Object.assign(document.createElement('option'), { value: name, textContent: name }));
@@ -1017,8 +1081,11 @@ function openSettingsPanel(onBack) {
             settings.callAudio.endSoundUrl = preset.endSoundUrl || '';
             settings.callAudio.ringtoneUrl = preset.ringtoneUrl || '';
             saveSettings();
-            // 입력 필드 업데이트를 위해 패널 재빌드
-            showToast(`프리셋 "${name}" 적용됨. 패널을 다시 열어 확인하세요.`, 'success', 2000);
+            // 입력 필드 업데이트
+            if (soundInputs.startSoundUrl) soundInputs.startSoundUrl.value = settings.callAudio.startSoundUrl;
+            if (soundInputs.endSoundUrl) soundInputs.endSoundUrl.value = settings.callAudio.endSoundUrl;
+            if (soundInputs.ringtoneUrl) soundInputs.ringtoneUrl.value = settings.callAudio.ringtoneUrl;
+            showToast(`프리셋 "${name}" 적용됨`, 'success', 2000);
         };
         const presetDeleteBtn = document.createElement('button');
         presetDeleteBtn.className = 'slm-btn slm-btn-danger slm-btn-sm';
@@ -1052,6 +1119,13 @@ function openSettingsPanel(onBack) {
         wrapper.appendChild(vibrateRow);
 
         return wrapper;
+        }
+
+        return createTabs([
+            { key: 'image', label: '🖼️ 이미지/이모티콘', content: buildImageSubTab() },
+            { key: 'imgprompt', label: '🎨 프롬프트/태그', content: buildPromptSubTab() },
+            { key: 'sound', label: '🔊 사운드', content: buildSoundSubTab() },
+        ], 'image');
     }
 
     function buildProbabilityTab() {
@@ -1529,8 +1603,8 @@ function openSettingsPanel(onBack) {
         const callSummaryInput = document.createElement('textarea');
         callSummaryInput.className = 'slm-textarea slm-call-summary-prompt-input';
         callSummaryInput.rows = 4;
-        callSummaryInput.value = settings.callSummaryPrompt || '';
-        callSummaryInput.placeholder = '비워두면 기본 프롬프트를 사용합니다. 예: {contactName}과의 통화 내용:\n{transcript}\n위 통화를 한국어로 2~3문장 요약하세요.';
+        callSummaryInput.value = settings.callSummaryPrompt || DEFAULT_SETTINGS.callSummaryPrompt;
+        callSummaryInput.placeholder = '예: {contactName}과의 통화 내용:\n{transcript}\n위 통화를 한국어로 2~3문장 요약하세요.';
         callSummaryInput.oninput = () => {
             settings.callSummaryPrompt = callSummaryInput.value;
             saveSettings();
@@ -1539,8 +1613,8 @@ function openSettingsPanel(onBack) {
         callSummaryResetBtn.className = 'slm-btn slm-btn-ghost slm-btn-sm';
         callSummaryResetBtn.textContent = '↺ 기본값';
         callSummaryResetBtn.onclick = () => {
-            settings.callSummaryPrompt = '';
-            callSummaryInput.value = '';
+            settings.callSummaryPrompt = DEFAULT_SETTINGS.callSummaryPrompt;
+            callSummaryInput.value = DEFAULT_SETTINGS.callSummaryPrompt;
             saveSettings();
         };
         callSummaryGroup.append(callSummaryInput, callSummaryResetBtn);
@@ -1773,7 +1847,11 @@ async function applyCharacterImageDisplayMode() {
     if (settings.messageImageGenerationMode) {
         // ── ON 모드: 이미지 생성 API로 실제 이미지 생성 ──
         showToast(`📷 ${picMatches.length}개 이미지 생성 중...`, 'info', 2000);
-        const appearanceTags = settings.characterAppearanceTags?.[charName] || '';
+        const appearanceTags = getAppearanceTagsByName(charName) || settings.characterAppearanceTags?.[charName] || '';
+        const userName = ctx?.name1 || '';
+        const userAppearanceTags = getAppearanceTagsByName(userName) || settings.characterAppearanceTags?.['{{user}}'] || '';
+        // 셀카/유저 사진 감지용 패턴
+        const userSelfieRe = /selfie|셀[카피]|셀[카피]|self[- ]?shot|my (photo|picture|face)|내 (사진|얼굴)|유저|user/i;
         for (const match of picMatches) {
             const fullTag = match[0];
             const rawPrompt = (match[1] || '').trim();
@@ -1782,7 +1860,10 @@ async function applyCharacterImageDisplayMode() {
                 replacements.push({ index: matchIndex, length: fullTag.length, replacement: '' });
                 continue;
             }
-            const prompt = appearanceTags ? `${rawPrompt}, ${appearanceTags}` : rawPrompt;
+            // 유저 셀카/사진인 경우 user 외관 태그를 주입, 아닌 경우 char 외관 태그 주입
+            const isUserPhoto = userSelfieRe.test(rawPrompt) || (userName && rawPrompt.toLowerCase().includes(userName.toLowerCase()));
+            const tagsToUse = isUserPhoto ? userAppearanceTags : appearanceTags;
+            const prompt = tagsToUse ? `${rawPrompt}, ${tagsToUse}` : rawPrompt;
             let replacement;
             try {
                 const imageUrl = await generateMessageImageViaApi(prompt);
