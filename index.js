@@ -195,7 +195,7 @@ function getSettings() {
     }
     // 하위 호환: 기존 messageImageDisplayMode가 남아있으면 마이그레이션
     if (ext[SETTINGS_KEY].messageImageDisplayMode != null) {
-        if (ext[SETTINGS_KEY].messageImageGenerationMode == null || ext[SETTINGS_KEY].messageImageGenerationMode === DEFAULT_SETTINGS.messageImageGenerationMode) {
+        if (ext[SETTINGS_KEY].messageImageGenerationMode == null) {
             ext[SETTINGS_KEY].messageImageGenerationMode = ext[SETTINGS_KEY].messageImageDisplayMode === 'image';
         }
         delete ext[SETTINGS_KEY].messageImageDisplayMode;
@@ -1704,6 +1704,9 @@ const PIC_TAG_REGEX = /<pic\s[^>]*?prompt="([^"]*)"[^>]*?\/?>/gi;
  * ON: AI에게 사진 상황에서 <pic prompt="..."> 태그를 출력하도록 지시
  * OFF: 주입을 제거하여 AI가 <pic> 태그를 출력하지 않도록 한다
  */
+// OFF 모드 이미지 프롬프트 — AI가 사진 상황을 <pic> 태그로 표시하되, 실제 생성은 하지 않음
+const MSG_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation (e.g., selfie, scenery, food, screenshot, etc.), insert a <pic prompt="image description in Korean for the photo situation"> tag at that point in your response.\nOnly insert when it makes contextual sense. The prompt should describe the image situation briefly.\n</image_generation_rule>';
+
 function updateMessageImageInjection() {
     const ctx = getContext();
     if (!ctx || typeof ctx.setExtensionPrompt !== 'function') return;
@@ -1714,8 +1717,7 @@ function updateMessageImageInjection() {
     } else {
         // OFF 모드에서도 AI가 <pic> 태그를 출력하도록 유도
         // (이후 텍스트로 변환 처리됨)
-        const offPrompt = `<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation (e.g., selfie, scenery, food, screenshot, etc.), insert a <pic prompt="image description in Korean for the photo situation"> tag at that point in your response.\nOnly insert when it makes contextual sense. The prompt should describe the image situation briefly.\n</image_generation_rule>`;
-        ctx.setExtensionPrompt(MSG_IMAGE_INJECT_TAG, offPrompt, 1, 0);
+        ctx.setExtensionPrompt(MSG_IMAGE_INJECT_TAG, MSG_IMAGE_OFF_PROMPT, 1, 0);
     }
 }
 
@@ -1762,45 +1764,75 @@ async function applyCharacterImageDisplayMode() {
     if (picMatches.length === 0) return;
 
     const charName = String(lastMsg.name || ctx?.name2 || '{{char}}');
-    const msgIdx = ctx.chat.length - 1;
+    const msgIdx = Number(ctx.chat.length - 1);
+
+    // 각 매치에 대한 대체 문자열을 미리 계산한다 (역순 처리를 위해)
+    /** @type {Array<{index: number, length: number, replacement: string}>} */
+    const replacements = [];
 
     if (settings.messageImageGenerationMode) {
         // ── ON 모드: 이미지 생성 API로 실제 이미지 생성 ──
         showToast(`📷 ${picMatches.length}개 이미지 생성 중...`, 'info', 2000);
-        let updatedMes = mes;
         const appearanceTags = settings.characterAppearanceTags?.[charName] || '';
         for (const match of picMatches) {
             const fullTag = match[0];
             const rawPrompt = (match[1] || '').trim();
+            const matchIndex = match.index;
             if (!rawPrompt) {
-                updatedMes = updatedMes.replace(fullTag, '');
+                replacements.push({ index: matchIndex, length: fullTag.length, replacement: '' });
                 continue;
             }
-            // 외관 태그가 있으면 프롬프트에 추가
             const prompt = appearanceTags ? `${rawPrompt}, ${appearanceTags}` : rawPrompt;
+            let replacement;
             try {
                 const imageUrl = await generateMessageImageViaApi(prompt);
                 if (imageUrl) {
                     const safeUrl = escapeHtml(imageUrl);
                     const safePrompt = escapeHtml(rawPrompt);
-                    updatedMes = updatedMes.replace(fullTag, `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image" style="max-width:100%;border-radius:var(--slm-image-radius,10px);margin:4px 0">`);
+                    replacement = `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image" style="max-width:100%;border-radius:var(--slm-image-radius,10px);margin:4px 0">`;
                 } else {
-                    // 이미지 생성 실패 시 텍스트로 폴백
                     const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
-                    updatedMes = updatedMes.replace(fullTag, template.replace(/\{description\}/g, rawPrompt));
+                    replacement = template.replace(/\{description\}/g, rawPrompt);
                 }
             } catch (err) {
                 console.warn('[ST-LifeSim] 메신저 이미지 개별 생성 실패:', err);
                 const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
-                updatedMes = updatedMes.replace(fullTag, template.replace(/\{description\}/g, rawPrompt));
+                replacement = template.replace(/\{description\}/g, rawPrompt);
             }
+            replacements.push({ index: matchIndex, length: fullTag.length, replacement });
         }
-        if (updatedMes !== mes) {
-            lastMsg.mes = updatedMes;
-            if (typeof ctx.saveChat === 'function') {
-                await ctx.saveChat();
+    } else {
+        // ── OFF 모드: 줄글 텍스트로 변환 ──
+        const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
+        for (const match of picMatches) {
+            const fullTag = match[0];
+            const prompt = (match[1] || '').trim();
+            const matchIndex = match.index;
+            if (!prompt) {
+                replacements.push({ index: matchIndex, length: fullTag.length, replacement: '' });
+                continue;
             }
-            // UI 업데이트
+            const text = template.replace(/\{description\}/g, prompt);
+            replacements.push({ index: matchIndex, length: fullTag.length, replacement: text });
+        }
+    }
+
+    if (replacements.length === 0) return;
+
+    // 역순으로 치환하여 인덱스 오프셋 문제를 방지한다
+    let updatedMes = mes;
+    for (let i = replacements.length - 1; i >= 0; i--) {
+        const { index, length, replacement } = replacements[i];
+        updatedMes = updatedMes.slice(0, index) + replacement + updatedMes.slice(index + length);
+    }
+
+    if (updatedMes !== mes) {
+        lastMsg.mes = updatedMes;
+        if (typeof ctx.saveChat === 'function') {
+            await ctx.saveChat();
+        }
+        // UI 업데이트
+        if (settings.messageImageGenerationMode && Number.isFinite(msgIdx) && msgIdx >= 0) {
             try {
                 const msgEl = document.querySelector(`.mes[mesid="${msgIdx}"]`);
                 if (msgEl) {
@@ -1811,29 +1843,10 @@ async function applyCharacterImageDisplayMode() {
                 console.warn('[ST-LifeSim] 메시지 UI 업데이트 실패:', uiErr);
             }
         }
-        if (picMatches.length > 0) {
-            showToast(`📷 이미지 생성 완료`, 'success', 1500);
-        }
-    } else {
-        // ── OFF 모드: 줄글 텍스트로 변환 ──
-        let updatedMes = mes;
-        const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
-        for (const match of picMatches) {
-            const fullTag = match[0];
-            const prompt = (match[1] || '').trim();
-            if (!prompt) {
-                updatedMes = updatedMes.replace(fullTag, '');
-                continue;
-            }
-            const text = template.replace(/\{description\}/g, prompt);
-            updatedMes = updatedMes.replace(fullTag, text);
-        }
-        if (updatedMes !== mes) {
-            lastMsg.mes = updatedMes;
-            if (typeof ctx.saveChat === 'function') {
-                await ctx.saveChat();
-            }
-        }
+    }
+
+    if (settings.messageImageGenerationMode && replacements.length > 0) {
+        showToast(`📷 이미지 생성 완료`, 'success', 1500);
     }
 }
 
