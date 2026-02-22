@@ -35,6 +35,7 @@ const SETTINGS_KEY = 'st-lifesim';
 // 주간/야간 테마 저장 키 (localStorage)
 const THEME_STORAGE_KEY = 'st-lifesim:forced-theme';
 const THEME_MODE_PRESETS_KEY = 'st-lifesim:theme-mode-presets';
+const IMAGE_INTENT_CONTEXT_WINDOW = 4;
 const ALWAYS_ON_MODULES = new Set(['quickTools', 'contacts']);
 const AI_ROUTE_DEFAULTS = {
     api: '',
@@ -1823,7 +1824,6 @@ function hasExplicitImageIntentAroundLatestMessage() {
     const ctx = getContext();
     const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
     if (!chat.length) return false;
-    const IMAGE_INTENT_CONTEXT_WINDOW = 4;
     const recentMessages = chat.slice(-IMAGE_INTENT_CONTEXT_WINDOW);
     const userRequestPatterns = [
         /사진.*(보내|줘|보여)|이미지.*(보내|줘|보여)|셀카.*(보내|줘)|찍은\s*사진/i,
@@ -1831,10 +1831,10 @@ function hasExplicitImageIntentAroundLatestMessage() {
     ];
     const charSendIntentPatterns = [
         /사진.*(보낼게|보내줄게|찍어줄게|첨부|보여줄게)|이미지.*(보낼게|보내줄게|첨부|보여줄게)|셀카.*(보낼게|보내줄게)/i,
-        /here'?s\s+(a\s+)?(photo|picture|pic|image)|i('|’)ll\s+send\s+(you\s+)?(a\s+)?(photo|picture|pic|image)|let\s+me\s+show/i,
+        /here['’]?s\s+(a\s+)?(photo|picture|pic|image)|i['’]ll\s+send\s+(you\s+)?(a\s+)?(photo|picture|pic|image)|let\s+me\s+show/i,
     ];
     return recentMessages.some((msg) => {
-        const text = String(msg?.mes || '');
+        const text = msg?.mes;
         if (!text) return false;
         const patterns = msg?.is_user ? userRequestPatterns : charSendIntentPatterns;
         return patterns.some((re) => re.test(text));
