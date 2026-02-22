@@ -531,7 +531,87 @@ export function renderVoiceMemoUI() {
     imageRow.appendChild(imageBtn);
     container.appendChild(imageRow);
 
+    // ── 유저 이미지 생성 (AI 이미지 생성 API) ──
+    const genImageTitle = document.createElement('h4');
+    genImageTitle.style.marginTop = '14px';
+    genImageTitle.textContent = '🎨 이미지 생성 (유저)';
+    container.appendChild(genImageTitle);
+
+    const genImageDesc = document.createElement('p');
+    genImageDesc.className = 'slm-desc';
+    genImageDesc.textContent = '이미지 설명을 입력하면 AI가 이미지를 생성하여 유저 메시지로 전송합니다.';
+    container.appendChild(genImageDesc);
+
+    const genImageRow = document.createElement('div');
+    genImageRow.className = 'slm-input-row';
+
+    const genImagePromptInput = document.createElement('input');
+    genImagePromptInput.className = 'slm-input';
+    genImagePromptInput.type = 'text';
+    genImagePromptInput.placeholder = '예: 카페에서 셀카, 음식 사진 등';
+
+    const genImageBtn = document.createElement('button');
+    genImageBtn.className = 'slm-btn slm-btn-primary slm-btn-sm';
+    genImageBtn.textContent = '🎨 생성';
+    genImageBtn.onclick = async () => {
+        const prompt = genImagePromptInput.value.trim();
+        if (!prompt) {
+            showToast('이미지 설명을 입력해주세요.', 'warn');
+            return;
+        }
+        genImageBtn.disabled = true;
+        genImageBtn.textContent = '⏳ 생성 중...';
+        try {
+            const imageUrl = await generateUserImage(prompt);
+            if (imageUrl) {
+                const radius = Math.max(0, Math.min(MAX_IMAGE_RADIUS, Number(getExtensionSettings()?.['st-lifesim']?.imageRadius ?? DEFAULT_IMAGE_RADIUS)));
+                await slashSend(`<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(prompt)}" class="slm-quick-image" style="border-radius:${radius}px">`);
+                genImagePromptInput.value = '';
+                showToast('이미지 생성 및 전송 완료', 'success', 1500);
+            } else {
+                showToast('이미지 생성에 실패했습니다. SD API가 활성화되어 있는지 확인해주세요.', 'error');
+            }
+        } catch (e) {
+            console.error('[ST-LifeSim] 유저 이미지 생성 오류:', e);
+            showToast('이미지 생성 실패: ' + e.message, 'error');
+        } finally {
+            genImageBtn.disabled = false;
+            genImageBtn.textContent = '🎨 생성';
+        }
+    };
+
+    genImageRow.appendChild(genImagePromptInput);
+    genImageRow.appendChild(genImageBtn);
+    container.appendChild(genImageRow);
+
     return container;
+}
+
+/**
+ * 유저가 이미지를 생성하여 전송한다 (이미지 생성 API 호출)
+ * @param {string} prompt - 이미지 생성 프롬프트
+ * @returns {Promise<string>} 생성된 이미지 URL 또는 빈 문자열
+ */
+async function generateUserImage(prompt) {
+    if (!prompt || !prompt.trim()) return '';
+    try {
+        const ctx = getContext();
+        if (!ctx) {
+            console.warn('[ST-LifeSim] 이미지 생성: 컨텍스트를 가져올 수 없습니다.');
+            return '';
+        }
+        if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
+            const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${prompt}`, { showOutput: false });
+            const resultStr = String(result?.pipe || result || '').trim();
+            if (resultStr && (resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:'))) {
+                return resultStr;
+            }
+        }
+        return '';
+    } catch (e) {
+        console.warn('[ST-LifeSim] 유저 이미지 생성 API 호출 실패:', e);
+        return '';
+    }
 }
 
 /**
