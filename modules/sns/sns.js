@@ -158,6 +158,9 @@ function getSnsPromptSettings() {
         externalApiTimeoutMs: Math.max(1000, Math.min(60000, Number(ext?.snsExternalApiTimeoutMs) || 12000)),
         language: ['ko', 'en', 'ja', 'zh'].includes(ext?.snsLanguage) ? ext.snsLanguage : 'ko',
         koreanTranslationPrompt: String(ext?.snsKoreanTranslationPrompt || 'Translate the following SNS text into natural Korean. Output Korean text only.\n{{text}}').trim(),
+        snsImageMode: ext?.snsImageMode === true,
+        snsImagePrompt: String(ext?.snsImagePrompt || '').trim(),
+        characterAppearanceTags: ext?.characterAppearanceTags && typeof ext.characterAppearanceTags === 'object' ? ext.characterAppearanceTags : {},
     };
 }
 
@@ -453,11 +456,20 @@ export async function triggerNpcPosting() {
         // 캐릭터별 기본 이미지가 있으면 우선 사용하고, 없을 때만 프리셋으로 보완한다.
         const finalImageUrl = defaultImg || presetImg;
         let imageDescription = '';
-        if (finalImageUrl && (typeof freshCtx.generateQuietPrompt === 'function' || typeof freshCtx.generateRaw === 'function')) {
-            const descPrompt = applyPromptTemplate(promptSettings.templates.imageDescription, {
+        const appearanceTags = String(promptSettings.characterAppearanceTags?.[pick.name] || '').trim();
+        let resolvedImagePrompt = '';
+        if (finalImageUrl && promptSettings.snsImageMode && (typeof freshCtx.generateQuietPrompt === 'function' || typeof freshCtx.generateRaw === 'function')) {
+            const basePrompt = applyPromptTemplate(promptSettings.templates.imageDescription, {
                 authorName: pick.name,
                 postContent,
             });
+            resolvedImagePrompt = promptSettings.snsImagePrompt
+                ? promptSettings.snsImagePrompt
+                    .replace(/\{authorName\}/g, pick.name)
+                    .replace(/\{postContent\}/g, postContent)
+                    .replace(/\{appearanceTags\}/g, appearanceTags)
+                : basePrompt;
+            const descPrompt = appearanceTags ? `${resolvedImagePrompt}\nAppearance tags: ${appearanceTags}` : resolvedImagePrompt;
             imageDescription = normalizeSnsText(await generateSnsText(freshCtx, enforceSnsLanguage(descPrompt, authorLanguage), `${pick.name}-image-desc`), SNS_IMAGE_DESC_MAX);
         }
         if (!imageDescription && inlineCaption) imageDescription = inlineCaption;
@@ -471,6 +483,7 @@ export async function triggerNpcPosting() {
             content: postContent,
             imageUrl: finalImageUrl,
             imageDescription,
+            imagePrompt: resolvedImagePrompt,
             likes: Math.floor(Math.random() * 30),
             likedByUser: false,
             comments: [],
@@ -775,6 +788,12 @@ function buildPostCard(post, onUpdate) {
     contentEl.appendChild(authorSpan);
     contentEl.appendChild(document.createTextNode(post.content));
     body.appendChild(contentEl);
+    if (post.imagePrompt) {
+        const promptEl = document.createElement('div');
+        promptEl.className = 'slm-desc';
+        promptEl.textContent = `🧠 이미지 프롬프트: ${post.imagePrompt}`;
+        body.appendChild(promptEl);
+    }
 
     // 댓글 수 표시
     if (post.comments.length > 0) {

@@ -108,6 +108,28 @@ function isCallModuleEnabled() {
     return settings?.enabled !== false && settings?.modules?.call !== false;
 }
 
+function getCallAudioSettings() {
+    const audio = getExtensionSettings()?.['st-lifesim']?.callAudio || {};
+    return {
+        startSoundUrl: String(audio.startSoundUrl || '').trim(),
+        endSoundUrl: String(audio.endSoundUrl || '').trim(),
+        ringtoneUrl: String(audio.ringtoneUrl || '').trim(),
+        vibrateOnIncoming: audio.vibrateOnIncoming === true,
+    };
+}
+
+function playCustomSound(url, loop = false) {
+    if (!url) return null;
+    try {
+        const audio = new Audio(url);
+        audio.loop = loop;
+        void audio.play().catch(() => {});
+        return audio;
+    } catch {
+        return null;
+    }
+}
+
 function getCallSummaryAiRouteSettings() {
     const route = getExtensionSettings()?.['st-lifesim']?.aiRoutes?.callSummary || {};
     return {
@@ -545,8 +567,17 @@ async function showIncomingCallDialog(charName) {
     card.append(title, caller, row, missedBtn);
     overlay.appendChild(card);
     document.body.appendChild(overlay);
+    const callAudio = getCallAudioSettings();
+    const ringtone = playCustomSound(callAudio.ringtoneUrl, true);
+    if (callAudio.vibrateOnIncoming && typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate([220, 120, 220, 120]);
+    }
 
     const cleanup = () => {
+        if (ringtone) {
+            ringtone.pause();
+            ringtone.currentTime = 0;
+        }
         overlay.remove();
         incomingCallUiOpen = false;
     };
@@ -695,6 +726,7 @@ async function startCall(charName, matchedContact = null, direction = 'outgoing'
 
     // 상단 배너 표시
     showCallBanner(charName);
+    playCustomSound(getCallAudioSettings().startSoundUrl);
 
     showToast(`통화 시작: ${charName}`, 'info');
 }
@@ -726,6 +758,7 @@ async function endCall() {
 
     // 상단 배너 제거
     removeCallBanner();
+    playCustomSound(getCallAudioSettings().endSoundUrl);
 
     // 통화 종료 메시지 삽입
     const ctx = getContext();
