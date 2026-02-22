@@ -92,8 +92,10 @@ function ensureCharContact() {
     const charName = ctx.name2;
     if (!charName) return;
 
-    const contacts = loadContacts('chat');
+    const contacts = loadContacts('character');
     const existing = contacts.find(c => c.isCharAuto || c.name === charName);
+    const chatContacts = loadContacts('chat');
+    const legacyChatIdx = chatContacts.findIndex(c => c.isCharAuto || c.name === charName);
     const syncedAvatar = ctx.characters?.[ctx.characterId]?.avatar
         ? `/characters/${ctx.characters?.[ctx.characterId]?.avatar}`
         : '';
@@ -105,8 +107,24 @@ function ensureCharContact() {
         existing.description = existing.description || syncedDescription;
         existing.personality = existing.personality || syncedPersonality;
         existing.isCharAuto = true;
-        existing.binding = 'chat';
-        saveContacts(contacts, 'chat');
+        existing.binding = 'character';
+        saveContacts(contacts, 'character');
+        return;
+    }
+
+    if (legacyChatIdx !== -1) {
+        const legacy = chatContacts.splice(legacyChatIdx, 1)[0];
+        contacts.push({
+            ...legacy,
+            name: charName,
+            avatar: legacy.avatar || syncedAvatar,
+            description: legacy.description || syncedDescription,
+            personality: legacy.personality || syncedPersonality,
+            binding: 'character',
+            isCharAuto: true,
+        });
+        saveContacts(chatContacts, 'chat');
+        saveContacts(contacts, 'character');
         return;
     }
 
@@ -121,10 +139,10 @@ function ensureCharContact() {
         personality: syncedPersonality,
         phone: '',
         tags: [],
-        binding: 'chat',
+        binding: 'character',
         isCharAuto: true,
     });
-    saveContacts(contacts, 'chat');
+    saveContacts(contacts, 'character');
 }
 
 /**
@@ -732,7 +750,7 @@ export function getContacts(binding = 'chat') {
  */
 export function getAppearanceTagsByName(name) {
     if (!name) return '';
-    const allContacts = [...loadContacts('chat'), ...loadContacts('character')];
+    const allContacts = [...loadContacts('character'), ...loadContacts('chat')];
     const contact = allContacts.find(c => c.name === name || c.displayName === name);
     return String(contact?.appearanceTags || '').trim();
 }
