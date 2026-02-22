@@ -17,7 +17,7 @@ import { getContext } from './utils/st-context.js';
 import { getExtensionSettings } from './utils/storage.js';
 import { injectContext, clearContext } from './utils/context-inject.js';
 import { createPopup, createTabs, closePopup } from './utils/popup.js';
-import { showToast, showConfirm } from './utils/ui.js';
+import { showToast, showConfirm, escapeHtml } from './utils/ui.js';
 import { exportAllData, importAllData, clearAllData } from './utils/storage.js';
 import { injectQuickSendButton, renderTimeDividerUI, renderReadReceiptUI, renderNoContactUI, renderEventGeneratorUI, renderVoiceMemoUI } from './modules/quick-tools/quick-tools.js';
 import { startFirstMsgTimer, renderFirstMsgSettingsUI } from './modules/firstmsg/firstmsg.js';
@@ -106,6 +106,17 @@ const DEFAULT_SETTINGS = {
     imageRadius: 10, // px
     defaultSnsImageUrl: '', // SNS 기본 이미지 URL
     snsImageMode: false, // SNS 게시물 이미지 자동 생성 여부
+    messageImageDisplayMode: 'image', // char 이미지 메시지 표시 방식 (image|text)
+    snsImagePrompt: '',
+    messageImagePrompt: '',
+    characterAppearanceTags: {}, // { [charName]: "tag1, tag2" }
+    callAudio: {
+        startSoundUrl: '',
+        endSoundUrl: '',
+        ringtoneUrl: '',
+        vibrateOnIncoming: false,
+    },
+    aiCustomModels: {}, // { [provider]: string[] }
     themeColors: {}, // CSS 커스텀 색상
     toast: {
         offsetY: 16,
@@ -166,6 +177,30 @@ function getSettings() {
     }
     if (ext[SETTINGS_KEY].themeColors == null) {
         ext[SETTINGS_KEY].themeColors = {};
+    }
+    if (!['image', 'text'].includes(ext[SETTINGS_KEY].messageImageDisplayMode)) {
+        ext[SETTINGS_KEY].messageImageDisplayMode = DEFAULT_SETTINGS.messageImageDisplayMode;
+    }
+    if (typeof ext[SETTINGS_KEY].snsImagePrompt !== 'string') {
+        ext[SETTINGS_KEY].snsImagePrompt = DEFAULT_SETTINGS.snsImagePrompt;
+    }
+    if (typeof ext[SETTINGS_KEY].messageImagePrompt !== 'string') {
+        ext[SETTINGS_KEY].messageImagePrompt = DEFAULT_SETTINGS.messageImagePrompt;
+    }
+    if (!ext[SETTINGS_KEY].characterAppearanceTags || typeof ext[SETTINGS_KEY].characterAppearanceTags !== 'object') {
+        ext[SETTINGS_KEY].characterAppearanceTags = {};
+    }
+    if (!ext[SETTINGS_KEY].callAudio || typeof ext[SETTINGS_KEY].callAudio !== 'object') {
+        ext[SETTINGS_KEY].callAudio = { ...DEFAULT_SETTINGS.callAudio };
+    }
+    ['startSoundUrl', 'endSoundUrl', 'ringtoneUrl'].forEach((k) => {
+        if (typeof ext[SETTINGS_KEY].callAudio[k] !== 'string') ext[SETTINGS_KEY].callAudio[k] = '';
+    });
+    if (typeof ext[SETTINGS_KEY].callAudio.vibrateOnIncoming !== 'boolean') {
+        ext[SETTINGS_KEY].callAudio.vibrateOnIncoming = DEFAULT_SETTINGS.callAudio.vibrateOnIncoming;
+    }
+    if (!ext[SETTINGS_KEY].aiCustomModels || typeof ext[SETTINGS_KEY].aiCustomModels !== 'object') {
+        ext[SETTINGS_KEY].aiCustomModels = {};
     }
     if (ext[SETTINGS_KEY].toast == null) {
         ext[SETTINGS_KEY].toast = { ...DEFAULT_SETTINGS.toast, colors: { ...DEFAULT_SETTINGS.toast.colors } };
@@ -695,6 +730,113 @@ function openSettingsPanel(onBack) {
         snsImageRow.appendChild(snsImageLbl);
         wrapper.appendChild(snsImageRow);
 
+        wrapper.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
+        const msgImageModeRow = document.createElement('div');
+        msgImageModeRow.className = 'slm-form-group';
+        const msgImageModeLbl = Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '💬 메신저 이미지 표시 모드' });
+        const msgImageModeSelect = document.createElement('select');
+        msgImageModeSelect.className = 'slm-select';
+        msgImageModeSelect.innerHTML = `
+            <option value="image">이미지로 표시</option>
+            <option value="text">줄글 텍스트로 표시</option>
+        `;
+        msgImageModeSelect.value = settings.messageImageDisplayMode || 'image';
+        msgImageModeSelect.onchange = () => {
+            settings.messageImageDisplayMode = msgImageModeSelect.value === 'text' ? 'text' : 'image';
+            saveSettings();
+        };
+        msgImageModeRow.append(msgImageModeLbl, msgImageModeSelect);
+        wrapper.appendChild(msgImageModeRow);
+
+        const snsImagePromptGroup = document.createElement('div');
+        snsImagePromptGroup.className = 'slm-form-group';
+        snsImagePromptGroup.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '📸 SNS 이미지 프롬프트 (커스텀)' }));
+        const snsImagePromptInput = document.createElement('textarea');
+        snsImagePromptInput.className = 'slm-textarea';
+        snsImagePromptInput.rows = 3;
+        snsImagePromptInput.placeholder = '예: {authorName}의 외형 태그 {appearanceTags}를 반영해 SNS 사진 설명 프롬프트를 작성';
+        snsImagePromptInput.value = settings.snsImagePrompt || '';
+        snsImagePromptInput.oninput = () => { settings.snsImagePrompt = snsImagePromptInput.value; saveSettings(); };
+        snsImagePromptGroup.appendChild(snsImagePromptInput);
+        wrapper.appendChild(snsImagePromptGroup);
+
+        const messageImagePromptGroup = document.createElement('div');
+        messageImagePromptGroup.className = 'slm-form-group';
+        messageImagePromptGroup.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '🖼️ 메신저 이미지 프롬프트 (커스텀)' }));
+        const messageImagePromptInput = document.createElement('textarea');
+        messageImagePromptInput.className = 'slm-textarea';
+        messageImagePromptInput.rows = 3;
+        messageImagePromptInput.placeholder = '예: {charName}가 보낸 이미지의 묘사를 생성할 때 사용할 프롬프트';
+        messageImagePromptInput.value = settings.messageImagePrompt || '';
+        messageImagePromptInput.oninput = () => { settings.messageImagePrompt = messageImagePromptInput.value; saveSettings(); };
+        messageImagePromptGroup.appendChild(messageImagePromptInput);
+        wrapper.appendChild(messageImagePromptGroup);
+
+        const ctx = getContext();
+        const currentCharName = ctx?.name2 || '';
+        if (currentCharName) {
+            const appearanceGroup = document.createElement('div');
+            appearanceGroup.className = 'slm-form-group';
+            appearanceGroup.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: `🏷️ ${currentCharName} 외관 태그 바인딩` }));
+            const appearanceInput = document.createElement('input');
+            appearanceInput.className = 'slm-input';
+            appearanceInput.type = 'text';
+            appearanceInput.placeholder = '예: long hair, school uniform, warm smile';
+            appearanceInput.value = settings.characterAppearanceTags?.[currentCharName] || '';
+            appearanceInput.oninput = () => {
+                if (!settings.characterAppearanceTags || typeof settings.characterAppearanceTags !== 'object') settings.characterAppearanceTags = {};
+                settings.characterAppearanceTags[currentCharName] = appearanceInput.value.trim();
+                saveSettings();
+            };
+            appearanceGroup.appendChild(appearanceInput);
+            wrapper.appendChild(appearanceGroup);
+        }
+
+        wrapper.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
+        const callSoundTitle = Object.assign(document.createElement('div'), {
+            className: 'slm-label',
+            textContent: '🔊 통화 사운드/진동',
+        });
+        callSoundTitle.style.fontWeight = '600';
+        wrapper.appendChild(callSoundTitle);
+        const callSoundDefs = [
+            { key: 'startSoundUrl', label: '통화 시작 사운드 URL' },
+            { key: 'endSoundUrl', label: '통화 종료 사운드 URL' },
+            { key: 'ringtoneUrl', label: '수신 착신음 URL' },
+        ];
+        callSoundDefs.forEach(({ key, label }) => {
+            const group = document.createElement('div');
+            group.className = 'slm-form-group';
+            group.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: label }));
+            const input = document.createElement('input');
+            input.className = 'slm-input';
+            input.type = 'url';
+            input.placeholder = 'https://...';
+            input.value = settings.callAudio?.[key] || '';
+            input.oninput = () => {
+                if (!settings.callAudio || typeof settings.callAudio !== 'object') settings.callAudio = { ...DEFAULT_SETTINGS.callAudio };
+                settings.callAudio[key] = input.value.trim();
+                saveSettings();
+            };
+            group.appendChild(input);
+            wrapper.appendChild(group);
+        });
+        const vibrateRow = document.createElement('div');
+        vibrateRow.className = 'slm-settings-row';
+        const vibrateLbl = document.createElement('label');
+        vibrateLbl.className = 'slm-toggle-label';
+        const vibrateChk = document.createElement('input');
+        vibrateChk.type = 'checkbox';
+        vibrateChk.checked = settings.callAudio?.vibrateOnIncoming === true;
+        vibrateChk.onchange = () => {
+            if (!settings.callAudio || typeof settings.callAudio !== 'object') settings.callAudio = { ...DEFAULT_SETTINGS.callAudio };
+            settings.callAudio.vibrateOnIncoming = vibrateChk.checked;
+            saveSettings();
+        };
+        vibrateLbl.append(vibrateChk, document.createTextNode(' 수신 시 진동 사용'));
+        vibrateRow.appendChild(vibrateLbl);
+        wrapper.appendChild(vibrateRow);
+
         return wrapper;
     }
 
@@ -769,10 +911,10 @@ function openSettingsPanel(onBack) {
 
         const colorDefs = [
             { key: '--slm-primary', label: '주요 색 (버튼/강조)', defaultVal: '#007aff' },
-            { key: '--slm-secondary', label: '보조 색 (보조 버튼)', defaultVal: '#6c757d' },
             { key: '--slm-bg', label: '패널 배경', defaultVal: '#ffffff' },
             { key: '--slm-surface', label: '카드/셀 배경', defaultVal: '#ffffff' },
             { key: '--slm-text', label: '텍스트 색', defaultVal: '#1c1c1e' },
+            { key: '--slm-text-secondary', label: '보조 텍스트 색', defaultVal: '#6d6d72' },
             { key: '--slm-border', label: '테두리 색', defaultVal: '#c7c7cc' },
             { key: '--slm-accent', label: '액센트 색 (SNS 헤더 등)', defaultVal: '#007aff' },
         ];
@@ -894,8 +1036,12 @@ function openSettingsPanel(onBack) {
     }
 
     function buildSnsPromptTab() {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'slm-settings-wrapper slm-form';
+        const routeSection = document.createElement('div');
+        routeSection.className = 'slm-settings-wrapper slm-form';
+        const snsSection = document.createElement('div');
+        snsSection.className = 'slm-settings-wrapper slm-form';
+        const messageSection = document.createElement('div');
+        messageSection.className = 'slm-settings-wrapper slm-form';
         if (!settings.aiRoutes) settings.aiRoutes = { sns: { ...AI_ROUTE_DEFAULTS }, snsTranslation: { ...AI_ROUTE_DEFAULTS }, callSummary: { ...AI_ROUTE_DEFAULTS }, contactProfile: { ...AI_ROUTE_DEFAULTS } };
         if (!settings.aiRoutes.sns) settings.aiRoutes.sns = { ...AI_ROUTE_DEFAULTS };
         if (!settings.aiRoutes.snsTranslation) settings.aiRoutes.snsTranslation = { ...AI_ROUTE_DEFAULTS };
@@ -907,7 +1053,7 @@ function openSettingsPanel(onBack) {
             textContent: '🤖 기능별 AI 모델 지정',
         });
         apiRouteTitle.style.fontWeight = '700';
-        wrapper.appendChild(apiRouteTitle);
+        routeSection.appendChild(apiRouteTitle);
 
         const apiRouteDesc = Object.assign(document.createElement('div'), {
             className: 'slm-label',
@@ -915,7 +1061,7 @@ function openSettingsPanel(onBack) {
         });
         apiRouteDesc.style.fontSize = '12px';
         apiRouteDesc.style.marginBottom = '8px';
-        wrapper.appendChild(apiRouteDesc);
+        routeSection.appendChild(apiRouteDesc);
 
         // 공급자별 표시 레이블 및 예시 모델
         const PROVIDER_OPTIONS = [
@@ -933,6 +1079,7 @@ function openSettingsPanel(onBack) {
             { value: 'vertexai', label: 'Vertex AI (Google Cloud)', models: ['gemini-2.5-pro', 'gemini-2.0-flash'] },
             { value: 'custom', label: '커스텀 API', models: [] },
         ];
+        const customModelsBySource = settings.aiCustomModels && typeof settings.aiCustomModels === 'object' ? settings.aiCustomModels : (settings.aiCustomModels = {});
 
         function buildAiRouteEditor(title, route) {
             const group = document.createElement('div');
@@ -959,9 +1106,15 @@ function openSettingsPanel(onBack) {
             modelInput.type = 'text';
             modelInput.placeholder = '모델명 직접 입력';
             modelInput.style.display = 'none';
+            const addModelBtn = document.createElement('button');
+            addModelBtn.className = 'slm-btn slm-btn-ghost slm-btn-sm';
+            addModelBtn.textContent = '+ 모델 추가';
+            addModelBtn.style.display = 'none';
 
             function refreshModelSelect() {
-                const presets = PROVIDER_OPTIONS.find(o => o.value === sourceSelect.value)?.models || [];
+                const providerPresets = PROVIDER_OPTIONS.find(o => o.value === sourceSelect.value)?.models || [];
+                const customPresets = Array.isArray(customModelsBySource[sourceSelect.value]) ? customModelsBySource[sourceSelect.value] : [];
+                const presets = [...providerPresets, ...customPresets.filter(m => !providerPresets.includes(m))];
                 modelSelect.innerHTML = '';
                 modelSelect.appendChild(Object.assign(document.createElement('option'), { value: '', textContent: '-- 모델 선택 (전역 기본) --' }));
                 presets.forEach(m => {
@@ -974,13 +1127,16 @@ function openSettingsPanel(onBack) {
                 if (!currentModel) {
                     modelSelect.value = '';
                     modelInput.style.display = 'none';
+                    addModelBtn.style.display = 'none';
                 } else if (presets.includes(currentModel)) {
                     modelSelect.value = currentModel;
                     modelInput.style.display = 'none';
+                    addModelBtn.style.display = 'none';
                 } else {
                     modelSelect.value = '__custom__';
                     modelInput.value = currentModel;
                     modelInput.style.display = '';
+                    addModelBtn.style.display = '';
                 }
             }
 
@@ -997,9 +1153,11 @@ function openSettingsPanel(onBack) {
             modelSelect.onchange = () => {
                 if (modelSelect.value === '__custom__') {
                     modelInput.style.display = '';
+                    addModelBtn.style.display = '';
                     modelInput.focus();
                 } else {
                     modelInput.style.display = 'none';
+                    addModelBtn.style.display = 'none';
                     route.model = modelSelect.value;
                 }
                 saveSettings();
@@ -1009,15 +1167,29 @@ function openSettingsPanel(onBack) {
             modelInput.oninput = () => { route.model = modelInput.value.trim(); saveSettings(); };
             group.appendChild(modelSelect);
             group.appendChild(modelInput);
+            addModelBtn.onclick = () => {
+                const source = sourceSelect.value;
+                const modelName = modelInput.value.trim();
+                if (!source || !modelName) return;
+                if (!Array.isArray(customModelsBySource[source])) customModelsBySource[source] = [];
+                if (!customModelsBySource[source].includes(modelName)) customModelsBySource[source].push(modelName);
+                route.model = modelName;
+                refreshModelSelect();
+                modelSelect.value = modelName;
+                modelInput.style.display = 'none';
+                addModelBtn.style.display = 'none';
+                saveSettings();
+            };
+            group.appendChild(addModelBtn);
 
-            wrapper.appendChild(group);
+            routeSection.appendChild(group);
         }
 
         buildAiRouteEditor('SNS 생성 라우팅', settings.aiRoutes.sns);
         buildAiRouteEditor('SNS 번역 라우팅', settings.aiRoutes.snsTranslation);
         buildAiRouteEditor('통화 요약 라우팅', settings.aiRoutes.callSummary);
         buildAiRouteEditor('연락처 AI 생성 라우팅', settings.aiRoutes.contactProfile);
-        wrapper.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
+        routeSection.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
 
         const endpointRow = document.createElement('div');
         endpointRow.className = 'slm-form-group';
@@ -1038,7 +1210,7 @@ function openSettingsPanel(onBack) {
             saveSettings();
         };
         endpointRow.appendChild(endpointSelect);
-        wrapper.appendChild(endpointRow);
+        routeSection.appendChild(endpointRow);
 
         const timeoutRow = document.createElement('div');
         timeoutRow.className = 'slm-input-row';
@@ -1058,8 +1230,8 @@ function openSettingsPanel(onBack) {
             saveSettings();
         };
         timeoutRow.append(timeoutLabel, timeoutInput, timeoutUnit, timeoutApply);
-        wrapper.appendChild(timeoutRow);
-        wrapper.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
+        routeSection.appendChild(timeoutRow);
+        routeSection.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
 
         const translationPromptGroup = document.createElement('div');
         translationPromptGroup.className = 'slm-form-group';
@@ -1073,7 +1245,7 @@ function openSettingsPanel(onBack) {
             saveSettings();
         };
         translationPromptGroup.append(translationPromptLabel, translationPromptInput);
-        wrapper.appendChild(translationPromptGroup);
+        snsSection.appendChild(translationPromptGroup);
 
         if (!settings.snsPrompts) settings.snsPrompts = { ...SNS_PROMPT_DEFAULTS };
         const promptDefs = [
@@ -1104,26 +1276,26 @@ function openSettingsPanel(onBack) {
                 saveSettings();
             };
             group.append(lbl, input, resetBtn);
-            wrapper.appendChild(group);
+            snsSection.appendChild(group);
         });
 
         // 통화 요약 프롬프트 커스터마이징 (Item 4)
-        wrapper.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
+        messageSection.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
         const callSummaryTitle = Object.assign(document.createElement('div'), {
             className: 'slm-label',
             textContent: '📞 통화 요약 프롬프트',
         });
         callSummaryTitle.style.fontWeight = '700';
-        wrapper.appendChild(callSummaryTitle);
+        messageSection.appendChild(callSummaryTitle);
         const callSummaryDesc = Object.assign(document.createElement('div'), {
             className: 'slm-desc',
             textContent: '통화 종료 후 요약 생성 시 사용할 프롬프트입니다. {contactName}(상대방 이름), {transcript}(통화 내용) 변수를 사용할 수 있습니다. 비워두면 기본 요약 프롬프트를 사용합니다.',
         });
-        wrapper.appendChild(callSummaryDesc);
+        messageSection.appendChild(callSummaryDesc);
         const callSummaryGroup = document.createElement('div');
         callSummaryGroup.className = 'slm-form-group';
         const callSummaryInput = document.createElement('textarea');
-        callSummaryInput.className = 'slm-textarea';
+        callSummaryInput.className = 'slm-textarea slm-call-summary-prompt-input';
         callSummaryInput.rows = 4;
         callSummaryInput.value = settings.callSummaryPrompt || '';
         callSummaryInput.placeholder = '비워두면 기본 프롬프트를 사용합니다. 예: {contactName}과의 통화 내용:\n{transcript}\n위 통화를 한국어로 2~3문장 요약하세요.';
@@ -1140,21 +1312,21 @@ function openSettingsPanel(onBack) {
             saveSettings();
         };
         callSummaryGroup.append(callSummaryInput, callSummaryResetBtn);
-        wrapper.appendChild(callSummaryGroup);
+        messageSection.appendChild(callSummaryGroup);
 
         // 메시지 템플릿 커스터마이징 (Item 3)
-        wrapper.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
+        messageSection.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
         const templateTitle = Object.assign(document.createElement('div'), {
             className: 'slm-label',
             textContent: '✉️ 메시지 템플릿 커스터마이징',
         });
         templateTitle.style.fontWeight = '700';
-        wrapper.appendChild(templateTitle);
+        messageSection.appendChild(templateTitle);
         const templateDesc = Object.assign(document.createElement('div'), {
             className: 'slm-desc',
             textContent: '각 기능에서 전송되는 메시지 포맷을 커스터마이징합니다. 사용 가능한 변수는 각 항목 설명을 참고하세요.',
         });
-        wrapper.appendChild(templateDesc);
+        messageSection.appendChild(templateDesc);
 
         if (!settings.messageTemplates) settings.messageTemplates = { ...DEFAULT_MESSAGE_TEMPLATES };
         const templateDefs = [
@@ -1176,9 +1348,28 @@ function openSettingsPanel(onBack) {
             input.className = 'slm-textarea';
             input.rows = rows;
             input.value = settings.messageTemplates[key] ?? DEFAULT_MESSAGE_TEMPLATES[key];
+            const preview = document.createElement('div');
+            preview.className = 'slm-call-summary';
+            preview.style.whiteSpace = 'normal';
+            preview.style.display = 'none';
+            const containsHtmlOrCss = (text) => /<\/?[a-z][\s\S]*>/i.test(text) || /(^|\n)\s*[.#a-zA-Z][^{\n]*\{[^}]*:[^}]*\}/.test(text);
+            const refreshPreview = () => {
+                const val = input.value || '';
+                const hasHtml = containsHtmlOrCss(val);
+                preview.style.display = hasHtml ? '' : 'none';
+                preview.innerHTML = '';
+                if (!hasHtml) return;
+                preview.appendChild(Object.assign(document.createElement('div'), { textContent: '👀 미리보기 (샌드박스)' }));
+                const frame = document.createElement('iframe');
+                frame.sandbox = '';
+                frame.style.cssText = 'width:100%;min-height:80px;border:1px solid var(--slm-border);border-radius:8px;background:#fff;margin-top:6px';
+                frame.srcdoc = String(val);
+                preview.appendChild(frame);
+            };
             input.oninput = () => {
                 settings.messageTemplates[key] = input.value;
                 saveSettings();
+                refreshPreview();
             };
             const resetBtn = document.createElement('button');
             resetBtn.className = 'slm-btn slm-btn-ghost slm-btn-sm';
@@ -1187,12 +1378,17 @@ function openSettingsPanel(onBack) {
                 settings.messageTemplates[key] = DEFAULT_MESSAGE_TEMPLATES[key];
                 input.value = settings.messageTemplates[key];
                 saveSettings();
+                refreshPreview();
             };
-            group.append(lbl, hintEl, input, resetBtn);
-            wrapper.appendChild(group);
+            refreshPreview();
+            group.append(lbl, hintEl, input, preview, resetBtn);
+            messageSection.appendChild(group);
         });
-
-        return wrapper;
+        return createTabs([
+            { key: 'route', label: '🤖 모델/라우팅', content: routeSection },
+            { key: 'sns', label: '📸 SNS 프롬프트', content: snsSection },
+            { key: 'message', label: '✉️ 메시지/통화', content: messageSection },
+        ], 'route');
     }
 
     const tabs = createTabs([
@@ -1243,6 +1439,36 @@ function syncQuickSendButtons() {
     }
     if (isModuleEnabled('quickTools')) {
         injectQuickSendButton();
+    }
+}
+
+function convertImageMessageToText(html, charName) {
+    const imageMatches = [...String(html || '').matchAll(/<img[^>]*src="([^"]+)"[^>]*>/gi)];
+    if (imageMatches.length === 0) return '';
+    const appearanceTag = getSettings().characterAppearanceTags?.[charName] || '';
+    const promptLine = getSettings().messageImagePrompt
+        ? getSettings().messageImagePrompt
+            .replace(/\{charName\}/g, charName)
+            .replace(/\{appearanceTags\}/g, appearanceTag)
+        : '';
+    const lines = imageMatches.map((m, i) => `📷 ${charName} 사진 ${i + 1}: ${m[1]}`);
+    if (promptLine) lines.push(`🧠 프롬프트: ${promptLine}`);
+    return lines.join('\n');
+}
+
+async function applyCharacterImageDisplayMode() {
+    const settings = getSettings();
+    if (settings.messageImageDisplayMode !== 'text') return;
+    const ctx = getContext();
+    const lastMsg = ctx?.chat?.[ctx.chat.length - 1];
+    if (!lastMsg || lastMsg.is_user) return;
+    const mes = String(lastMsg.mes || '');
+    if (!/<img[\s\S]*?>/i.test(mes)) return;
+    const converted = convertImageMessageToText(mes, String(lastMsg.name || ctx?.name2 || '{{char}}'));
+    if (!converted) return;
+    lastMsg.mes = escapeHtml(converted).replace(/\n/g, '<br>');
+    if (typeof ctx?.saveChat === 'function') {
+        await ctx.saveChat();
     }
 }
 
@@ -1400,9 +1626,10 @@ async function init() {
     }
 
     if (evSrc && eventTypes?.CHARACTER_MESSAGE_RENDERED) {
-        evSrc.on(eventTypes.CHARACTER_MESSAGE_RENDERED, () => {
+        evSrc.on(eventTypes.CHARACTER_MESSAGE_RENDERED, async () => {
             onCharacterMessageRenderedForProactiveCall();
             trackGifticonUsageFromCharacterMessage();
+            await applyCharacterImageDisplayMode().catch((e) => console.error('[ST-LifeSim] 이미지 표시 모드 적용 오류:', e));
         });
     }
 

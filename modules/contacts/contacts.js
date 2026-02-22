@@ -91,20 +91,32 @@ function ensureCharContact() {
     if (!charName) return;
 
     const contacts = loadContacts('chat');
-    const exists = contacts.some(c => c.isCharAuto || c.name === charName);
-    if (exists) return;
+    const existing = contacts.find(c => c.isCharAuto || c.name === charName);
+    const syncedAvatar = ctx.characters?.[ctx.characterId]?.avatar
+        ? `/characters/${ctx.characters?.[ctx.characterId]?.avatar}`
+        : '';
+    const syncedDescription = ctx.characters?.[ctx.characterId]?.description || '';
+    const syncedPersonality = ctx.characters?.[ctx.characterId]?.personality || '';
+    if (existing) {
+        existing.name = charName;
+        existing.avatar = existing.avatar || syncedAvatar;
+        existing.description = existing.description || syncedDescription;
+        existing.personality = existing.personality || syncedPersonality;
+        existing.isCharAuto = true;
+        existing.binding = 'chat';
+        saveContacts(contacts, 'chat');
+        return;
+    }
 
     contacts.push({
         id: generateId(),
         name: charName,
         displayName: '',
-        avatar: ctx.characters?.[ctx.characterId]?.avatar
-            ? `/characters/${ctx.characters?.[ctx.characterId]?.avatar}`
-            : '',
-        description: ctx.characters?.[ctx.characterId]?.description || '',
+        avatar: syncedAvatar,
+        description: syncedDescription,
         relationToUser: '주요 캐릭터',
         relationToChar: '',
-        personality: ctx.characters?.[ctx.characterId]?.personality || '',
+        personality: syncedPersonality,
         phone: '',
         tags: [],
         binding: 'chat',
@@ -138,8 +150,9 @@ export function initContacts() {
 
     // 채팅 로드 시 {{char}} 자동 추가
     const ctx = getContext();
-    if (ctx?.eventSource && ctx?.event_types) {
-        ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, () => {
+    const resolvedEventTypes = ctx?.event_types || ctx?.eventTypes;
+    if (ctx?.eventSource && resolvedEventTypes?.CHAT_CHANGED) {
+        ctx.eventSource.on(resolvedEventTypes.CHAT_CHANGED, () => {
             ensureCharContact();
         });
     }

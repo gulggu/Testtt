@@ -212,7 +212,7 @@ export function renderReadReceiptUI() {
 
 /**
  * 읽씹 연출 실행
- * ({{char}}가 유저에게 보낸 메시지를 유저가 읽었지만 답장하지 않는 상황)
+ * ({{user}}가 {{char}}에게 보낸 메시지를 {{char}}가 읽고 답장하지 않는 상황)
  */
 async function handleReadReceipt() {
     const ctx = getContext();
@@ -222,7 +222,7 @@ async function handleReadReceipt() {
         const tmpl = getExtensionSettings()?.['st-lifesim']?.messageTemplates?.readReceipt;
         const prompt = tmpl
             ? tmpl.replace(/\{charName\}/g, charName)
-            : `${charName} sent {{user}} a message. {{user}} has read ${charName}'s message but has not replied yet. Briefly describe ${charName}'s reaction in 1-2 sentences.`;
+            : `{{user}} sent ${charName} a message. ${charName} has read {{user}}'s message but has not replied yet. Briefly describe ${charName}'s reaction in 1-2 sentences.`;
         await slashGen(prompt, charName);
         showToast('읽씹 연출 완료', 'success', 1500);
     } catch (e) {

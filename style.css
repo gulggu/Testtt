@@ -1765,6 +1765,10 @@ body[data-theme="dark"],
   line-height: 1.5;
   word-break: break-word;
 }
+.slm-call-summary-prompt-input {
+  color: var(--slm-text) !important;
+  background: var(--slm-bg-secondary) !important;
+}
 .slm-jump-btn {
   font-size: 11px;
   padding: 3px 8px;
