@@ -113,7 +113,7 @@ function ensureCharContact() {
     }
 
     if (legacyChatIdx !== -1) {
-        const legacy = chatContacts.splice(legacyChatIdx, 1)[0];
+        const legacy = chatContacts[legacyChatIdx];
         contacts.push({
             ...legacy,
             name: charName,
@@ -123,8 +123,9 @@ function ensureCharContact() {
             binding: 'character',
             isCharAuto: true,
         });
-        saveContacts(chatContacts, 'chat');
         saveContacts(contacts, 'character');
+        const remainingChatContacts = chatContacts.filter((_, idx) => idx !== legacyChatIdx);
+        saveContacts(remainingChatContacts, 'chat');
         return;
     }
 
