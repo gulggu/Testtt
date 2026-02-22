@@ -82,7 +82,7 @@ const DEFAULT_MESSAGE_TEMPLATES = {
     callEnd: '📵 통화 종료 (통화시간: {timeStr})',
     voiceMemo: '🎤 음성메시지 ({timeStr})<br>{hint}',
     voiceMemoAiPrompt: 'As {charName}, send exactly one voice message in Korean. You must choose suitable duration and content yourself based on current context.\nOutput only this HTML format:\n🎤 음성메시지 (M:SS)<br>[actual voice message content]',
-    readReceipt: '{{user}} sent {charName} a message. {charName} has read {{user}}\'s message but has not replied yet. Briefly describe {charName}\'s reaction in 1-2 sentences.',
+    readReceipt: '{charName} sent a message to {{user}}. {{user}} has read {charName}\'s message but has not replied yet. Briefly describe {charName}\'s reaction in 1-2 sentences as dialogue.',
     noContact: '{charName} tried to reach {{user}} but {{user}} has not seen or responded yet. Briefly describe the situation in 1-2 sentences.',
     gifticonSend: '{emoji} **기프티콘 전송 완료**\n- 보내는 사람: {senderName}\n- 받는 사람: {recipient}\n- 품목: {name}{valuePart}{memoPart}',
 };
@@ -109,8 +109,8 @@ const DEFAULT_SETTINGS = {
     messageImageGenerationMode: false, // 메신저 이미지 자동 생성 여부 (ON: 이미지 API로 생성, OFF: 줄글 텍스트)
     messageImageTextTemplate: '[사진: {description}]', // OFF일 때 줄글 형식 커스텀 템플릿
     messageImageInjectionPrompt: '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation (e.g., selfie, scenery, food, screenshot, etc.), insert a <pic prompt="image description in English for stable diffusion"> tag at that point in your response.\nOnly insert when it makes contextual sense. The prompt should describe the image visually.\n</image_generation_rule>',
-    snsImagePrompt: 'Create a photo for {authorName}\'s SNS post. Appearance: {appearanceTags}. Scene should match the post content naturally. Photorealistic, casual daily life style.',
-    messageImagePrompt: 'Generate an image that {charName} would send via messenger. Appearance: {appearanceTags}. The image should feel personal and candid, matching the conversation context.',
+    snsImagePrompt: 'Create a photorealistic image for {authorName}\'s SNS post. Character appearance: {appearanceTags}. Post content: "{postContent}". The image must accurately depict the scene described in the post. Focus on matching the subject, setting, and mood of the post text. Style: casual daily-life smartphone photo, natural lighting, candid feel.',
+    messageImagePrompt: 'Generate a photorealistic image that {charName} would send via messenger. Character appearance: {appearanceTags}. The image must reflect the character\'s physical appearance accurately based on the appearance tags. Style: personal candid photo matching the conversation context, natural and authentic feel.',
     characterAppearanceTags: {}, // { [charName]: "tag1, tag2" }
     callAudio: {
         startSoundUrl: '',
@@ -848,7 +848,7 @@ function openSettingsPanel(onBack) {
         snsImagePromptInput.className = 'slm-textarea';
         snsImagePromptInput.rows = 3;
         snsImagePromptInput.placeholder = '예: {authorName}의 외형 태그 {appearanceTags}를 반영해 SNS 사진 설명 프롬프트를 작성';
-        snsImagePromptInput.value = settings.snsImagePrompt || '';
+        snsImagePromptInput.value = settings.snsImagePrompt || DEFAULT_SETTINGS.snsImagePrompt;
         snsImagePromptInput.oninput = () => { settings.snsImagePrompt = snsImagePromptInput.value; saveSettings(); };
         snsImagePromptGroup.appendChild(snsImagePromptInput);
         const snsImagePromptResetBtn = document.createElement('button');
@@ -869,7 +869,7 @@ function openSettingsPanel(onBack) {
         messageImagePromptInput.className = 'slm-textarea';
         messageImagePromptInput.rows = 3;
         messageImagePromptInput.placeholder = '예: {charName}가 보낸 이미지의 묘사를 생성할 때 사용할 프롬프트';
-        messageImagePromptInput.value = settings.messageImagePrompt || '';
+        messageImagePromptInput.value = settings.messageImagePrompt || DEFAULT_SETTINGS.messageImagePrompt;
         messageImagePromptInput.oninput = () => { settings.messageImagePrompt = messageImagePromptInput.value; saveSettings(); };
         messageImagePromptGroup.appendChild(messageImagePromptInput);
         const messageImagePromptResetBtn = document.createElement('button');
@@ -1529,8 +1529,8 @@ function openSettingsPanel(onBack) {
         const callSummaryInput = document.createElement('textarea');
         callSummaryInput.className = 'slm-textarea slm-call-summary-prompt-input';
         callSummaryInput.rows = 4;
-        callSummaryInput.value = settings.callSummaryPrompt || '';
-        callSummaryInput.placeholder = '비워두면 기본 프롬프트를 사용합니다. 예: {contactName}과의 통화 내용:\n{transcript}\n위 통화를 한국어로 2~3문장 요약하세요.';
+        callSummaryInput.value = settings.callSummaryPrompt || DEFAULT_SETTINGS.callSummaryPrompt;
+        callSummaryInput.placeholder = '예: {contactName}과의 통화 내용:\n{transcript}\n위 통화를 한국어로 2~3문장 요약하세요.';
         callSummaryInput.oninput = () => {
             settings.callSummaryPrompt = callSummaryInput.value;
             saveSettings();
@@ -1539,8 +1539,8 @@ function openSettingsPanel(onBack) {
         callSummaryResetBtn.className = 'slm-btn slm-btn-ghost slm-btn-sm';
         callSummaryResetBtn.textContent = '↺ 기본값';
         callSummaryResetBtn.onclick = () => {
-            settings.callSummaryPrompt = '';
-            callSummaryInput.value = '';
+            settings.callSummaryPrompt = DEFAULT_SETTINGS.callSummaryPrompt;
+            callSummaryInput.value = DEFAULT_SETTINGS.callSummaryPrompt;
             saveSettings();
         };
         callSummaryGroup.append(callSummaryInput, callSummaryResetBtn);

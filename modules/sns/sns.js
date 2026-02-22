@@ -14,7 +14,6 @@ import { registerContextBuilder } from '../../utils/context-inject.js';
 import { showToast, generateId } from '../../utils/ui.js';
 import { createPopup } from '../../utils/popup.js';
 import { getContacts } from '../contacts/contacts.js';
-import { translate } from '../../../../translate/index.js';
 
 const MODULE_KEY = 'sns-feed';
 const AVATARS_KEY = 'sns-avatars';
@@ -835,12 +834,6 @@ function buildPostCard(post, onUpdate) {
     contentEl.appendChild(authorSpan);
     contentEl.appendChild(document.createTextNode(post.content));
     body.appendChild(contentEl);
-    if (post.imagePrompt) {
-        const promptEl = document.createElement('div');
-        promptEl.className = 'slm-desc';
-        promptEl.textContent = `🧠 이미지 프롬프트: ${post.imagePrompt}`;
-        body.appendChild(promptEl);
-    }
 
     // 댓글 수 표시
     if (post.comments.length > 0) {
@@ -1104,7 +1097,9 @@ function createTranslateButton(text, parent, findExisting, translationClass, com
             if (ctx && (typeof ctx.generateRaw === 'function' || typeof ctx.generateQuietPrompt === 'function')) {
                 translated = await generateSnsText(ctx, customPrompt, 'sns-translation', 'snsTranslation');
             }
-            if (!translated) translated = await translate(String(text || ''), 'ko');
+            if (!translated) {
+                showToast('AI 번역 결과가 비어 있습니다.', 'warn', 1200);
+            }
             const line = document.createElement('div');
             line.className = translationClass;
             line.textContent = `🇰🇷 ${translated || ''}`.trim();
