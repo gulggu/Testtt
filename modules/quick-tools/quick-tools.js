@@ -21,6 +21,14 @@ const DEFAULT_IMAGE_RADIUS = 10;
 const MAX_IMAGE_RADIUS = 50;
 
 /**
+ * 설정된 이미지 모서리 반경(px)을 반환한다
+ * @returns {number}
+ */
+function getImageRadius() {
+    return Math.max(0, Math.min(MAX_IMAGE_RADIUS, Number(getExtensionSettings()?.['st-lifesim']?.imageRadius ?? DEFAULT_IMAGE_RADIUS)));
+}
+
+/**
  * 퀵 센드 버튼을 sendform의 전송 버튼(#send_but) 바로 앞에 삽입한다
  */
 export function injectQuickSendButton() {
@@ -519,7 +527,7 @@ export function renderVoiceMemoUI() {
     imageBtn.onclick = async () => {
         const url = imageInput.value.trim();
         if (!url) return;
-        const radius = Math.max(0, Math.min(MAX_IMAGE_RADIUS, Number(getExtensionSettings()?.['st-lifesim']?.imageRadius ?? DEFAULT_IMAGE_RADIUS)));
+        const radius = getImageRadius();
         const desc = imageDescInput.value.trim();
         const descHtml = desc ? `<br><em class="slm-quick-image-desc">${escapeHtml(desc)}</em>` : '';
         await slashSend(`<img src="${escapeHtml(url)}" alt="이미지" class="slm-quick-image" style="border-radius:${radius}px">${descHtml}`);
@@ -564,7 +572,7 @@ export function renderVoiceMemoUI() {
         try {
             const imageUrl = await generateUserImage(prompt);
             if (imageUrl) {
-                const radius = Math.max(0, Math.min(MAX_IMAGE_RADIUS, Number(getExtensionSettings()?.['st-lifesim']?.imageRadius ?? DEFAULT_IMAGE_RADIUS)));
+                const radius = getImageRadius();
                 await slashSend(`<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(prompt)}" class="slm-quick-image" style="border-radius:${radius}px">`);
                 genImagePromptInput.value = '';
                 showToast('이미지 생성 및 전송 완료', 'success', 1500);
@@ -602,6 +610,7 @@ async function generateUserImage(prompt) {
         }
         if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
             const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${prompt}`, { showOutput: false });
+            // result.pipe: 신규 SillyTavern API 반환값, result: 구버전 폴백
             const resultStr = String(result?.pipe || result || '').trim();
             if (resultStr && (resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:'))) {
                 return resultStr;
