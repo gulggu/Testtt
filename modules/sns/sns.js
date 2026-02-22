@@ -1100,6 +1100,7 @@ function createTranslateButton(text, parent, findExisting, translationClass, com
             }
             if (!translated) {
                 showToast('AI 번역 결과가 비어 있습니다.', 'warn', 1200);
+                return;
             }
             const line = document.createElement('div');
             line.className = translationClass;
