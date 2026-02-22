@@ -381,7 +381,7 @@ function openMainMenuPopup() {
     themeBtn.className = 'slm-theme-toggle-btn';
 
     function updateThemeBtn() {
-        const t = getForcedTheme();
+        const t = getEffectiveTheme();
         if (t === 'light') {
             themeBtn.innerHTML = '<span class="slm-theme-toggle-icon">☀️</span><span class="slm-theme-toggle-label">주간</span>';
             themeBtn.title = '야간 모드로 전환';
@@ -1933,22 +1933,48 @@ async function applyCharacterImageDisplayMode() {
 
 // ── 주간/야간 테마 토글 ──────────────────────────────────────────
 /**
- * 현재 강제 테마를 읽는다 ('light' | 'dark')
- * @returns {'light'|'dark'}
+ * 사용자가 명시적으로 저장한 강제 테마를 반환한다.
+ * 저장된 값이 없으면 null을 반환한다 (자동 감지 상태).
+ * @returns {'light'|'dark'|null}
  */
 function getForcedTheme() {
     const stored = localStorage.getItem(THEME_STORAGE_KEY);
-    return stored === 'dark' ? 'dark' : 'light';
+    if (stored === 'dark' || stored === 'light') return stored;
+    return null;
 }
 
 /**
- * 강제 테마를 적용한다
- * @param {'light'|'dark'} theme
+ * 시스템/ST 테마를 포함한 실제 적용 중인 테마를 반환한다.
+ * 강제 테마가 없으면 SillyTavern 클래스 및 시스템 설정을 확인한다.
+ * @returns {'light'|'dark'}
+ */
+function getEffectiveTheme() {
+    const forced = getForcedTheme();
+    if (forced) return forced;
+    if (
+        document.body.classList.contains('dark-theme') ||
+        document.body.dataset.theme === 'dark' ||
+        document.body.classList.contains('darkTheme') ||
+        window.matchMedia('(prefers-color-scheme: dark)').matches
+    ) {
+        return 'dark';
+    }
+    return 'light';
+}
+
+/**
+ * 강제 테마를 적용한다.
+ * null을 전달하면 강제 테마를 해제하고 시스템/ST 테마로 복귀한다.
+ * @param {'light'|'dark'|null} theme
  */
 function applyForcedTheme(theme) {
-    const resolved = theme === 'dark' ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-slm-theme', resolved);
-    localStorage.setItem(THEME_STORAGE_KEY, resolved);
+    if (theme === 'dark' || theme === 'light') {
+        document.documentElement.setAttribute('data-slm-theme', theme);
+        localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } else {
+        document.documentElement.removeAttribute('data-slm-theme');
+        localStorage.removeItem(THEME_STORAGE_KEY);
+    }
 }
 
 /**
@@ -1956,7 +1982,7 @@ function applyForcedTheme(theme) {
  * @returns {'light'|'dark'} 새 테마 값
  */
 function cycleTheme() {
-    const current = getForcedTheme();
+    const current = getEffectiveTheme();
     const next = current === 'light' ? 'dark' : 'light';
     applyForcedTheme(next);
     return next;
@@ -2004,8 +2030,9 @@ async function init() {
     document.documentElement.style.setProperty('--slm-emoticon-radius', (settings.emoticonRadius ?? 10) + 'px');
     document.documentElement.style.setProperty('--slm-image-radius', (settings.imageRadius ?? 10) + 'px');
 
-    // 저장된 강제 테마 적용 (주간/야간 토글)
-    applyForcedTheme(getForcedTheme());
+    // 저장된 강제 테마가 있을 때만 적용 (없으면 시스템/ST 테마를 그대로 따름)
+    const savedTheme = getForcedTheme();
+    if (savedTheme) applyForcedTheme(savedTheme);
 
     // 저장된 테마 색상 적용
     if (settings.themeColors) {
