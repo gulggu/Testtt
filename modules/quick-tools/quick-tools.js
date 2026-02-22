@@ -610,7 +610,7 @@ async function generateUserImage(prompt) {
             return '';
         }
         const userName = ctx?.name1 || '';
-        const userAppearanceTags = getAppearanceTagsByName(userName) || getExtensionSettings()?.['st-lifesim']?.characterAppearanceTags?.['{{user}}'] || '';
+        const userAppearanceTags = getAppearanceTagsByName(userName) || getAppearanceTagsByName('{{user}}') || getExtensionSettings()?.['st-lifesim']?.characterAppearanceTags?.['{{user}}'] || '';
         const finalPrompt = userAppearanceTags ? `${prompt.trim()}, ${String(userAppearanceTags).trim()}` : prompt.trim();
         if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
             const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${finalPrompt}`, { showOutput: false });

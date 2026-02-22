@@ -1215,7 +1215,11 @@ function openSettingsPanel(onBack) {
         modePresetDeleteBtn.textContent = '🗑️';
         modePresetDeleteBtn.title = '선택된 프리셋 삭제';
         const loadThemeModePresets = () => {
-            try { return JSON.parse(localStorage.getItem(THEME_MODE_PRESETS_KEY) || '{}'); } catch { return {}; }
+            const raw = localStorage.getItem(THEME_MODE_PRESETS_KEY) || '{}';
+            try { return JSON.parse(raw); } catch (e) {
+                console.warn('[ST-LifeSim] 테마 모드 프리셋 파싱 실패:', e, raw);
+                return {};
+            }
         };
         const refreshModePresetList = () => {
             modePresetSelect.innerHTML = '';
@@ -1913,6 +1917,11 @@ async function applyCharacterImageDisplayMode() {
         const appearanceTags = getAppearanceTagsByName(charName) || settings.characterAppearanceTags?.[charName] || '';
         const userName = ctx?.name1 || '';
         const userAppearanceTags = getAppearanceTagsByName(userName) || settings.characterAppearanceTags?.['{{user}}'] || '';
+        const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const userNameRegex = userName ? new RegExp(escapeRegex(userName.toLowerCase())) : null;
+        const charNameRegex = charName ? new RegExp(escapeRegex(charName.toLowerCase())) : null;
+        const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
+        const charHintRegex = /\bchar\b|{{char}}|캐릭터/;
         for (const match of picMatches) {
             const fullTag = match[0];
             const rawPrompt = (match[1] || '').trim();
@@ -1922,12 +1931,10 @@ async function applyCharacterImageDisplayMode() {
                 continue;
             }
             const promptLower = rawPrompt.toLowerCase();
-            const escapedUserName = userName ? userName.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
-            const escapedCharName = charName ? charName.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
-            const mentionsUser = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/.test(promptLower)
-                || (!!escapedUserName && new RegExp(escapedUserName).test(promptLower));
-            const mentionsChar = /\bchar\b|{{char}}|캐릭터/.test(promptLower)
-                || (!!escapedCharName && new RegExp(escapedCharName).test(promptLower));
+            const mentionsUser = userHintRegex.test(promptLower)
+                || (!!userNameRegex && userNameRegex.test(promptLower));
+            const mentionsChar = charHintRegex.test(promptLower)
+                || (!!charNameRegex && charNameRegex.test(promptLower));
             const tags = [];
             if (mentionsUser && !mentionsChar && userAppearanceTags) tags.push(userAppearanceTags);
             else {
