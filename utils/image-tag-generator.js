@@ -428,7 +428,7 @@ export async function generateImageTags(rawPrompt, options = {}) {
     // ── Step 5: Build final prompt ──
     const finalPrompt = buildImageApiPrompt(finalSceneTags, appearanceGroups);
 
-    return { sceneTags, appearanceGroups, finalPrompt };
+    return { sceneTags: finalSceneTags, appearanceGroups, finalPrompt };
 }
 
 // ── internal helpers ──

@@ -124,12 +124,11 @@ function saveCategoryVisibilityMap(map) {
 function isAiUsableByPolicy(emoticon, categoryAiMap, charCategoryAiMap) {
     if (emoticon.aiOverrideAllow) return true;
     // Per-character category setting takes priority (default: not allowed)
-    if (charCategoryAiMap && charCategoryAiMap[emoticon.category] === true) {
-        return emoticon.aiUsable !== false;
+    if (charCategoryAiMap && emoticon.category in charCategoryAiMap) {
+        return charCategoryAiMap[emoticon.category] && emoticon.aiUsable !== false;
     }
-    if (charCategoryAiMap && charCategoryAiMap[emoticon.category] !== true) {
-        return false;
-    }
+    // If no per-character setting exists, default to not allowed
+    if (charCategoryAiMap) return false;
     // Legacy global fallback
     if (categoryAiMap?.[emoticon.category] === false) return false;
     return emoticon.aiUsable !== false;
@@ -407,8 +406,9 @@ function buildEmoticonContent() {
         charLbl.appendChild(charChk);
         // 한국어 조사: 이름 끝이 받침으로 끝나면 '이', 아니면 '가'
         const lastChar = charName ? charName[charName.length - 1] : '';
-        const hasJongseong = lastChar && lastChar.charCodeAt(0) >= 0xAC00 && lastChar.charCodeAt(0) <= 0xD7A3
-            && (lastChar.charCodeAt(0) - 0xAC00) % 28 !== 0;
+        const charCode = lastChar ? lastChar.charCodeAt(0) : 0;
+        const hasJongseong = charCode >= 0xAC00 && charCode <= 0xD7A3
+            && (charCode - 0xAC00) % 28 !== 0;
         const particle = hasJongseong ? '이' : '가';
         charLbl.appendChild(document.createTextNode(
             ` ${charName || '캐릭터'}${particle} 이 카테고리의 이모티콘을 사용하도록 허용`

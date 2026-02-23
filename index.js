@@ -1187,8 +1187,11 @@ function openSettingsPanel(onBack) {
                 rsfChk.onchange = () => {
                     if (!settings.quickAccess) settings.quickAccess = { ...DEFAULT_SETTINGS.quickAccess };
                     if (!settings.quickAccess.rightSendFormItems) settings.quickAccess.rightSendFormItems = {};
-                    settings.quickAccess.rightSendFormItems[item.key] = rsfChk.checked;
-                    if (!rsfChk.checked) delete settings.quickAccess.rightSendFormItems[item.key];
+                    if (rsfChk.checked) {
+                        settings.quickAccess.rightSendFormItems[item.key] = true;
+                    } else {
+                        delete settings.quickAccess.rightSendFormItems[item.key];
+                    }
                     saveSettings();
                     injectRightSendFormIcons();
                 };
