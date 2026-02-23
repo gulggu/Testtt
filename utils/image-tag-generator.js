@@ -64,6 +64,7 @@ const TAG_CONVERSION_PROMPT = [
 function buildCharacterAwarePrompt(characters, appearanceVarMap) {
     const charList = characters.length > 0
         ? characters.map(c => {
+            const desc = c.description ? ` (${c.description})` : ''; // ✅ fix: desc 선언
             const tags = c.appearanceTags ? ` [appearance: ${c.appearanceTags}]` : '';
             return `  - ${c.name}${desc}${tags}`;
         }).join('\n')
@@ -92,7 +93,7 @@ function buildCharacterAwarePrompt(characters, appearanceVarMap) {
         '2) CHARACTER IDENTIFICATION: Which characters from the known list are mentioned or would naturally participate in this situation?',
         '3) APPEARANCE VARIABLES: What are the appearance tag variables for each identified character? (referenced below)',
         '4) TAG COMPOSITION: Compose Danbooru-style tags for the scene/situation (replace underscores with spaces).',
-        '5) FORMAT VALIDATION: Ensure the output follows the format: scene_tags | {{appearanceTag:char1}} | {{appearanceTag:char2}}',
+        '5) FORMAT VALIDATION: Ensure the output follows the format: scene_tags | {{appearanceTag:char1}}s description | {{appearanceTag:char2}}s description',
         '   Each section MUST be separated by " | " (pipe with spaces).',
         '6) CONSISTENCY CHECK: Verify character count tags match the appearance tags.',
         '   - If appearance tags indicate 2 males, do NOT output "1boy 1girl" — output "2boys" instead.',
@@ -123,8 +124,6 @@ function buildCharacterAwarePrompt(characters, appearanceVarMap) {
         'Known characters:',
         charList,
         varRefBlock,
-        'Example: If 3 male characters a, b, c take a selfie at a cafe →',
-        '3boys, selfie, multiple boys, cafe, indoor, looking at viewer, upper body, warm lighting, casual | {{appearanceTag:a}} | {{appearanceTag:b}} | {{appearanceTag:c}}',
         '',
         'Image description:',
     ].join('\n');
@@ -441,6 +440,7 @@ export async function generateImageTags(rawPrompt, options = {}) {
 
 /**
  * Sanitize AI output: strip non-tag noise, reject if Korean remains.
+ * Preserves pipe-separated sections (scene | appearance1 | appearance2 format).
  * @param {string} raw
  * @returns {string}
  */
@@ -450,7 +450,7 @@ function sanitizeTags(raw) {
     // Remove common AI preamble / markdown fences
     let cleaned = raw
         .replace(/```[^`]*```/gs, '')
-        .replace(/^[^a-zA-Z0-9_(]*/, '')
+        .replace(/^[^a-zA-Z0-9_(|]*/, '') // ✅ fix: 파이프 문자를 허용 문자에 포함
         .trim();
 
     // Reject if Korean characters leaked through
@@ -459,14 +459,19 @@ function sanitizeTags(raw) {
         return '';
     }
 
-    // Normalize whitespace around commas
-    cleaned = cleaned
-        .split(',')
-        .map(t => t.replace(/_/g, ' ').trim().replace(/\s+/g, ' '))
-        .filter(Boolean)
-        .join(', ');
+    // ✅ fix: 파이프 섹션을 분리한 뒤 각 섹션 내부 태그만 정리 → 파이프 구조 보존
+    const sections = cleaned.split(/\s*\|\s*/);
+    const sanitizedSections = sections
+        .map(section =>
+            section
+                .split(',')
+                .map(t => t.replace(/_/g, ' ').trim().replace(/\s+/g, ' '))
+                .filter(Boolean)
+                .join(', ')
+        )
+        .filter(Boolean);
 
-    return cleaned;
+    return sanitizedSections.join(' | ');
 }
 
 /**
