@@ -14,6 +14,7 @@ import { registerContextBuilder } from '../../utils/context-inject.js';
 import { showToast, generateId, escapeHtml } from '../../utils/ui.js';
 import { createPopup } from '../../utils/popup.js';
 import { isCallActive } from '../call/call.js';
+import { getContext } from '../../utils/st-context.js';
 
 const GLOBAL_BINDING = 'global';
 
@@ -37,6 +38,7 @@ function getEmoticonRadius() {
 
 const MODULE_KEY = 'emoticons';
 const CATEGORY_AI_KEY = 'emoticon-category-ai';
+const CHAR_CATEGORY_AI_KEY = 'emoticon-char-category-ai';
 const CATEGORY_VISIBILITY_KEY = 'emoticon-category-visibility';
 
 /**
@@ -89,6 +91,28 @@ function saveCategoryAiMap(map) {
     saveData(CATEGORY_AI_KEY, map, GLOBAL_BINDING);
 }
 
+/**
+ * 현재 캐릭터의 카테고리별 이모티콘 허용 맵을 불러온다 (character 바인딩 → 채팅을 새로 파도 유지)
+ * 기본값: {} (모두 허용 안 함)
+ * @returns {{ [category: string]: boolean }}
+ */
+function loadCharCategoryAiMap() {
+    return loadData(CHAR_CATEGORY_AI_KEY, {}, 'character');
+}
+
+/**
+ * 현재 캐릭터의 카테고리별 이모티콘 허용 맵을 저장한다
+ * @param {{ [category: string]: boolean }} map
+ */
+function saveCharCategoryAiMap(map) {
+    saveData(CHAR_CATEGORY_AI_KEY, map, 'character');
+}
+
+function getCurrentCharName() {
+    const ctx = getContext();
+    return ctx?.name2 || '';
+}
+
 function loadCategoryVisibilityMap() {
     return loadData(CATEGORY_VISIBILITY_KEY, {}, GLOBAL_BINDING);
 }
@@ -97,8 +121,15 @@ function saveCategoryVisibilityMap(map) {
     saveData(CATEGORY_VISIBILITY_KEY, map, GLOBAL_BINDING);
 }
 
-function isAiUsableByPolicy(emoticon, categoryAiMap) {
+function isAiUsableByPolicy(emoticon, categoryAiMap, charCategoryAiMap) {
     if (emoticon.aiOverrideAllow) return true;
+    // Per-character category setting takes priority (default: not allowed)
+    if (charCategoryAiMap && emoticon.category in charCategoryAiMap) {
+        return charCategoryAiMap[emoticon.category] && emoticon.aiUsable !== false;
+    }
+    // If no per-character setting exists, default to not allowed
+    if (charCategoryAiMap) return false;
+    // Legacy global fallback
     if (categoryAiMap?.[emoticon.category] === false) return false;
     return emoticon.aiUsable !== false;
 }
@@ -114,7 +145,8 @@ export function initEmoticon() {
 
         const emoticons = loadEmoticons();
         const categoryAiMap = loadCategoryAiMap();
-        const aiEmoticons = emoticons.filter(e => isAiUsableByPolicy(e, categoryAiMap));
+        const charCategoryAiMap = loadCharCategoryAiMap();
+        const aiEmoticons = emoticons.filter(e => isAiUsableByPolicy(e, categoryAiMap, charCategoryAiMap));
         if (aiEmoticons.length === 0) return null;
         const size = getEmoticonSize();
         const radius = getEmoticonRadius();
@@ -333,11 +365,13 @@ function buildEmoticonContent() {
 
     function renderCategoryAiControl() {
         categoryAiRow.innerHTML = '';
+        categoryAiRow.style.fontSize = '12px';
         const categoryVisibilityMap = loadCategoryVisibilityMap();
         const hasCurrentCategory = currentCategory !== '전체' && currentCategory !== '즐겨찾기';
         if (hasCurrentCategory) {
             const visibleLbl = document.createElement('label');
             visibleLbl.className = 'slm-toggle-label';
+            visibleLbl.style.fontSize = '12px';
             const visibleChk = document.createElement('input');
             visibleChk.type = 'checkbox';
             visibleChk.checked = categoryVisibilityMap[currentCategory] !== false;
@@ -353,21 +387,33 @@ function buildEmoticonContent() {
         }
 
         if (currentCategory === '전체' || currentCategory === '즐겨찾기') return;
-        const categoryAiMap = loadCategoryAiMap();
-        const lbl = document.createElement('label');
-        lbl.className = 'slm-toggle-label';
-        const chk = document.createElement('input');
-        chk.type = 'checkbox';
-        chk.checked = categoryAiMap[currentCategory] !== false;
-        chk.onchange = () => {
-            const nextMap = loadCategoryAiMap();
-            nextMap[currentCategory] = chk.checked;
-            saveCategoryAiMap(nextMap);
+
+        // 캐릭터별 카테고리 이모티콘 허용 설정 (character 바인딩 → 채팅을 새로 파도 유지)
+        const charName = getCurrentCharName();
+        const charCategoryAiMap = loadCharCategoryAiMap();
+        const charLbl = document.createElement('label');
+        charLbl.className = 'slm-toggle-label';
+        charLbl.style.fontSize = '12px';
+        const charChk = document.createElement('input');
+        charChk.type = 'checkbox';
+        charChk.checked = charCategoryAiMap[currentCategory] === true;
+        charChk.onchange = () => {
+            const nextMap = loadCharCategoryAiMap();
+            nextMap[currentCategory] = charChk.checked;
+            saveCharCategoryAiMap(nextMap);
             renderGrid();
         };
-        lbl.appendChild(chk);
-        lbl.appendChild(document.createTextNode(` 카테고리 AI 사용 (${currentCategory})`));
-        categoryAiRow.appendChild(lbl);
+        charLbl.appendChild(charChk);
+        // 한국어 조사: 이름 끝이 받침으로 끝나면 '이', 아니면 '가'
+        const lastChar = charName ? charName[charName.length - 1] : '';
+        const charCode = lastChar ? lastChar.charCodeAt(0) : 0;
+        const hasJongseong = charCode >= 0xAC00 && charCode <= 0xD7A3
+            && (charCode - 0xAC00) % 28 !== 0;
+        const particle = hasJongseong ? '이' : '가';
+        charLbl.appendChild(document.createTextNode(
+            ` ${charName || '캐릭터'}${particle} 이 카테고리의 이모티콘을 사용하도록 허용`
+        ));
+        categoryAiRow.appendChild(charLbl);
     }
 
     // 카테고리 탭 렌더링
@@ -415,8 +461,9 @@ function buildEmoticonContent() {
         }
 
         const categoryAiMap = loadCategoryAiMap();
+        const charCategoryAiMap = loadCharCategoryAiMap();
         filtered.forEach(e => {
-            const aiUsable = isAiUsableByPolicy(e, categoryAiMap);
+            const aiUsable = isAiUsableByPolicy(e, categoryAiMap, charCategoryAiMap);
             const cell = document.createElement('div');
             cell.className = 'slm-emoticon-cell';
             cell.title = `${e.name}${aiUsable ? '' : ' 🔒'}`;
