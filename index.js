@@ -573,7 +573,7 @@ function openUserImagePromptPopup() {
 
     // Enter 키로 생성 (Shift+Enter는 줄바꿈)
     input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        if (e.key === 'Enter' && !e.shiftKey && !genBtn.disabled) {
             e.preventDefault();
             genBtn.click();
         }
