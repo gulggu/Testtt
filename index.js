@@ -477,7 +477,7 @@ const QUICK_ACCESS_ITEMS = [
     } },
     { key: 'callRequest', icon: '📞', label: '통화 요청', moduleKey: 'call', action: async () => { await requestActiveCharacterCall(); } },
     { key: 'readReceipt', icon: '🔕', label: '읽씹하기', moduleKey: 'quickTools', action: async () => { await triggerReadReceipt(); } },
-    { key: 'noContact', icon: '📵', label: '안읽씹하기', moduleKey: 'quickTools', action: async () => { await triggerNoContact(); } },
+    { key: 'noContact', icon: '📵', label: '연락 안 됨(안읽씹)', moduleKey: 'quickTools', action: async () => { await triggerNoContact(); } },
     { key: 'voiceMemo', icon: '🎤', label: '음성메모 삽입', moduleKey: 'quickTools', action: async () => {
         const secRaw = window.prompt('음성메모 길이(초)를 입력하세요.', '30');
         if (secRaw == null) return;

@@ -128,26 +128,28 @@ function applyTagGenerationPromptTemplate(basePrompt, rawPrompt) {
     const prompt = `${basePrompt}\n${rawPrompt}`;
     const { tagGenerationFullPromptTemplate: template } = getPromptTemplateSettings();
     if (!template) return prompt;
+    const hasPlaceholder = /\{(?:basePrompt|rawPrompt|prompt)\}/.test(template);
     const rendered = template
         .replace(/\{basePrompt\}/g, basePrompt)
         .replace(/\{rawPrompt\}/g, rawPrompt)
         .replace(/\{prompt\}/g, prompt)
         .trim();
     if (!rendered) return prompt;
-    if (rendered === template) return `${rendered}\n${prompt}`.trim();
+    if (!hasPlaceholder) return `${rendered}\n${prompt}`.trim();
     return rendered;
 }
 
 function applyImageApiPromptTemplate(finalPrompt, sceneTags, appearancePart) {
     const { imageApiFullPromptTemplate: template } = getPromptTemplateSettings();
     if (!template) return finalPrompt;
+    const hasPlaceholder = /\{(?:finalPrompt|sceneTags|appearanceTags)\}/.test(template);
     const rendered = template
         .replace(/\{finalPrompt\}/g, finalPrompt)
         .replace(/\{sceneTags\}/g, sceneTags)
         .replace(/\{appearanceTags\}/g, appearancePart)
         .trim();
     if (!rendered) return finalPrompt;
-    if (rendered === template) return `${rendered} ${finalPrompt}`.trim();
+    if (!hasPlaceholder) return `${rendered}\n${finalPrompt}`.trim();
     return rendered;
 }
 
