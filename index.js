@@ -171,7 +171,7 @@ const DEFAULT_SETTINGS = {
         customLabels: {},       // { [key]: string } - custom display names
         customImages: {},       // { [key]: string } - image URL replacement for emoji
         rightSendFormItems: {}, // { [key]: true } - items to show as extra icons in sendform area
-        order: ['userImage', 'callRequest', 'readReceipt', 'noContact', 'voiceMemo', 'emoticon', 'deletedMessage', 'sns', 'quickSend'],
+        order: ['userImage', 'callRequest', 'readReceipt', 'noContact', 'voiceMemo', 'emoticon', 'deletedMessage', 'sns', 'quickSend', 'snsImageToggle', 'messengerImageToggle', 'dayNightToggle', 'settingsShortcut'],
         items: {
             userImage: true,
             callRequest: true,
@@ -182,6 +182,10 @@ const DEFAULT_SETTINGS = {
             deletedMessage: true,
             sns: true,
             quickSend: true,
+            snsImageToggle: true,
+            messengerImageToggle: true,
+            dayNightToggle: true,
+            settingsShortcut: true,
         },
     },
 };
@@ -597,6 +601,28 @@ const QUICK_ACCESS_ITEMS = [
     { key: 'deletedMessage', icon: '🚫', label: '삭제된 메시지', moduleKey: 'quickTools', action: async () => { await triggerDeletedMessage(); } },
     { key: 'sns', icon: '📸', label: 'SNS 들어가기', moduleKey: 'sns', action: () => openSnsPopup() },
     { key: 'quickSend', icon: '💌', label: '트리거 없이 메세지 전송', moduleKey: 'quickTools', action: async () => { await triggerQuickSend(); } },
+    { key: 'snsImageToggle', icon: '🖼️', label: 'SNS 이미지 허용', isToggle: true, action: () => {
+        const s = getSettings();
+        s.snsImageMode = !s.snsImageMode;
+        saveSettings();
+        showToast(`SNS 이미지: ${s.snsImageMode ? 'ON' : 'OFF'}`, 'success', 1500);
+    }, getToggleState: () => getSettings().snsImageMode === true },
+    { key: 'messengerImageToggle', icon: '💬', label: '메신저 이미지 허용', isToggle: true, action: () => {
+        const s = getSettings();
+        s.messageImageGenerationMode = !s.messageImageGenerationMode;
+        saveSettings();
+        updateMessageImageInjection();
+        showToast(`메신저 이미지: ${s.messageImageGenerationMode ? 'ON' : 'OFF'}`, 'success', 1500);
+    }, getToggleState: () => getSettings().messageImageGenerationMode === true },
+    { key: 'dayNightToggle', icon: '🌓', label: '주간/야간 모드', isToggle: true, action: () => {
+        const next = cycleTheme();
+        const label = next === 'light' ? '주간 모드' : '야간 모드';
+        showToast(`테마: ${label}`, 'success', 1200);
+    }, getToggleState: () => getEffectiveTheme() === 'dark' },
+    { key: 'settingsShortcut', icon: '⚙️', label: '설정', action: () => {
+        closePopup('quick-access-menu');
+        openSettingsPanel();
+    } },
 ];
 
 function getOrderedQuickAccessItems(includeDisabled = false) {
@@ -643,26 +669,37 @@ function openQuickAccessPopup() {
             btn.className = `slm-qa-btn slm-qa-mode-${displayMode}`;
             const label = customLabels[item.key] || item.label;
             const imgUrl = normalizeQuickAccessImageUrl(customImages[item.key] || '');
+            // Toggle items show ON/OFF state indicator
+            const toggleSuffix = item.isToggle && typeof item.getToggleState === 'function'
+                ? (item.getToggleState() ? ' ✅' : ' ❌') : '';
+            const displayLabel = label + toggleSuffix;
             if (displayMode === 'emojiOnly') {
                 if (imgUrl) {
-                    btn.innerHTML = `<img src="${escapeHtml(imgUrl)}" alt="${escapeHtml(label)}" class="slm-qa-img">`;
+                    btn.innerHTML = `<img src="${escapeHtml(imgUrl)}" alt="${escapeHtml(displayLabel)}" class="slm-qa-img">`;
                 } else {
                     btn.innerHTML = `<span class="slm-qa-icon">${escapeHtml(item.icon)}</span>`;
                 }
-                btn.title = label;
+                btn.title = displayLabel;
             } else if (displayMode === 'labelOnly') {
-                btn.textContent = label;
+                btn.textContent = displayLabel;
             } else {
                 // full mode
                 if (imgUrl) {
-                    btn.innerHTML = `<img src="${escapeHtml(imgUrl)}" alt="" class="slm-qa-img"> <span>${escapeHtml(label)}</span>`;
+                    btn.innerHTML = `<img src="${escapeHtml(imgUrl)}" alt="" class="slm-qa-img"> <span>${escapeHtml(displayLabel)}</span>`;
                 } else {
-                    btn.innerHTML = `<span class="slm-qa-icon">${escapeHtml(item.icon)}</span> <span>${escapeHtml(label)}</span>`;
+                    btn.innerHTML = `<span class="slm-qa-icon">${escapeHtml(item.icon)}</span> <span>${escapeHtml(displayLabel)}</span>`;
                 }
             }
             btn.onclick = async () => {
-                closePopup('quick-access-menu');
-                await item.action();
+                if (item.isToggle) {
+                    // Toggle items: execute action without closing popup, then refresh popup
+                    await item.action();
+                    closePopup('quick-access-menu');
+                    openQuickAccessPopup();
+                } else {
+                    closePopup('quick-access-menu');
+                    await item.action();
+                }
             };
             grid.appendChild(btn);
         });
