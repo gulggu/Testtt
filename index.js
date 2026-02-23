@@ -111,7 +111,7 @@ const DEFAULT_SETTINGS = {
     snsImageMode: false, // SNS 게시물 이미지 자동 생성 여부
     messageImageGenerationMode: false, // 메신저 이미지 자동 생성 여부 (ON: 이미지 API로 생성, OFF: 줄글 텍스트)
     messageImageTextTemplate: '[사진: {description}]', // OFF일 때 줄글 형식 커스텀 템플릿
-    messageImageInjectionPrompt: '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation, insert a <pic prompt="image description in English for stable diffusion"> tag at that point in your response.\nThink about whether the current context calls for a photo — not only when someone explicitly says "photo" or "picture," but also when the situation naturally suggests one (e.g., {{user}} asks {{char}} to pose, {{char}} wants to show something, a visually interesting moment occurs).\nRules:\n1) Default subject is {{char}} only. Always include {{char}}\'s name explicitly in the prompt.\n2) If other characters from the contacts are involved, include their names explicitly.\n3) Include {{user}} only when the context explicitly says both are together or the photo is clearly about {{user}}.\n4) Do not mix appearance traits of multiple people unless the scene explicitly includes multiple people.\n5) Keep the prompt visual and concise.\n6) Each <pic> tag must describe a NEW unique scene. Never reuse or reference a previously generated image URL.\n</image_generation_rule>',
+    messageImageInjectionPrompt: '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation, insert a <pic prompt="image description in English for stable diffusion"> tag at that point in your response.\nThink about whether the current context calls for a photo — not only when someone explicitly says "photo" or "picture," but also when the situation naturally suggests one (e.g., {{user}} asks {{char}} to pose or make a V sign, {{char}} wants to show something, a visually interesting moment occurs, {{user}} asks about {{char}}\'s current appearance or activity).\nRules:\n1) Default subject is {{char}} only. Always include {{char}}\'s name explicitly in the prompt.\n2) If other characters from the contacts are involved, include their names explicitly so their appearance can be resolved.\n3) Include {{user}} only when the context explicitly says both are together or the photo is clearly about {{user}}. Use {{user}}\'s name explicitly.\n4) Do not mix appearance traits of multiple people unless the scene explicitly includes multiple people.\n5) Keep the prompt visual and concise using Danbooru-style tag concepts.\n6) Each <pic> tag MUST describe a completely NEW unique scene. NEVER reuse, reference, or modify a previously generated image URL from the conversation. Always write a fresh description.\n7) Analyze visual intent from context — if the user implies a visual action (e.g., "do a V sign", "show me your outfit"), generate a <pic> tag even without the word "photo".\n</image_generation_rule>',
     snsImagePrompt: 'Create a photorealistic image for {authorName}\'s SNS post. Character appearance: {appearanceTags}. Post content: "{postContent}". The image must accurately depict the scene described in the post. Focus on matching the subject, setting, and mood of the post text. Style: casual daily-life smartphone photo, natural lighting, candid feel. Use Danbooru-style concepts and prefer spaces instead of underscores.',
     messageImagePrompt: 'Generate a photorealistic image that {charName} would send via messenger. Character appearance: {appearanceTags}. The image must reflect the character\'s physical appearance accurately based on the appearance tags. Style: personal candid photo matching the conversation context, natural and authentic feel. Use Danbooru-style concepts and prefer spaces instead of underscores.',
     characterAppearanceTags: {}, // { [charName]: "tag1, tag2" }
@@ -2048,12 +2048,19 @@ function hasExplicitImageIntentAroundLatestMessage() {
         /photo|picture|pic|image|selfie|screenshot|send\s+(me\s+)?(a\s+)?(photo|picture|pic|image)|show\s+(me\s+)?(a\s+)?(photo|picture|pic|image)/i,
         /브이\s*해|포즈.*(잡아|취해|해줘)|찍어\s*줘|인증.*샷|보여\s*줘/i,
         /take\s+(a\s+)?(photo|pic|selfie|picture)|pose\s+for/i,
+        // C1: Implicit visual intent — user requests a visual action without explicitly saying "photo"
+        /v\s*sign|peace\s*sign|손가락|브이|윙크|wink|미소.*지어|smile\s+for|손\s*흔들|wave/i,
+        /어떤\s*표정|어떻게\s*생겼|입고\s*있|wearing|옷.*보여|outfit|look\s+like/i,
+        /어디\s*있|where\s+are\s+you|뭐\s*하고\s*있|what\s+are\s+you\s+doing|지금\s*모습/i,
     ];
     const charSendIntentPatterns = [
         /사진.*(보낼게|보내줄게|찍어줄게|첨부|보여줄게)|이미지.*(보낼게|보내줄게|첨부|보여줄게)|셀카.*(보낼게|보내줄게)/i,
         /here['’]?s\s+(a\s+)?(photo|picture|pic|image)|i['’]ll\s+send\s+(you\s+)?(a\s+)?(photo|picture|pic|image)|let\s+me\s+show/i,
         /찍어\s*봤|찍었|보내\s*줄게|올려\s*줄게|보여\s*줄게|보낼\s*거/i,
         /took\s+(a\s+)?(photo|pic|selfie|picture)|check\s+this\s+out|look\s+at\s+this/i,
+        // C1: Implicit visual intent — character describes a visual action that implies an image
+        /v\s*sign|peace\s*sign|브이.*했|윙크.*했|wink|미소.*지었|smiled/i,
+        /찍어\s*봄|찍어봤|한\s*장.*찍|잠깐.*봐|이거\s*봐/i,
     ];
     return recentMessages.some((msg) => {
         const text = msg?.mes;
@@ -2110,7 +2117,7 @@ const PIC_TAG_REGEX = /<pic\s[^>]*?prompt="([^"]*)"[^>]*?\/?>/gi;
  * OFF: 주입을 제거하여 AI가 <pic> 태그를 출력하지 않도록 한다
  */
 // OFF 모드 이미지 프롬프트 — AI가 사진 상황을 <pic> 태그로 표시하되, 실제 생성은 하지 않음
-const MSG_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation, insert a <pic prompt="image description in Korean for the photo situation"> tag at that point in your response.\nThink about whether the current context calls for a photo — not only when someone explicitly says "photo" or "picture," but also when the situation naturally suggests one.\nRules:\n1) Default subject is {{char}} only. Always include {{char}}\'s name explicitly.\n2) If other characters from the contacts are involved, include their names explicitly.\n3) Include {{user}} only when context explicitly indicates both are together or the photo is focused on {{user}}.\n4) Do not mix unrelated character appearance traits.\n5) Keep the situation brief and visual.\n6) Each <pic> tag must describe a NEW unique scene. Never reuse or reference a previously generated image URL.\n</image_generation_rule>';
+const MSG_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation, insert a <pic prompt="image description in Korean for the photo situation"> tag at that point in your response.\nThink about whether the current context calls for a photo — not only when someone explicitly says "photo" or "picture," but also when the situation naturally suggests one (e.g., {{user}} asks {{char}} to pose, make a gesture, or show something).\nRules:\n1) Default subject is {{char}} only. Always include {{char}}\'s name explicitly.\n2) If other characters from the contacts are involved, include their names explicitly.\n3) Include {{user}} only when context explicitly indicates both are together or the photo is focused on {{user}}. Use {{user}}\'s name explicitly.\n4) Do not mix unrelated character appearance traits.\n5) Keep the situation brief and visual.\n6) Each <pic> tag MUST describe a completely NEW unique scene. NEVER reuse, reference, or modify a previously generated image URL from the conversation.\n7) Analyze visual intent from context — if the user implies a visual action, generate a <pic> tag even without the word "photo".\n</image_generation_rule>';
 
 function updateMessageImageInjection() {
     const ctx = getContext();
@@ -2124,6 +2131,22 @@ function updateMessageImageInjection() {
         // (이후 텍스트로 변환 처리됨)
         ctx.setExtensionPrompt(MSG_IMAGE_INJECT_TAG, MSG_IMAGE_OFF_PROMPT, 1, 0);
     }
+}
+
+/**
+ * C2: 채팅 기록에 이미 존재하는 이미지 URL인지 확인한다.
+ * 이전에 생성된 이미지 URL을 재사용하는 버그를 방지한다.
+ * @param {string} url - 확인할 이미지 URL
+ * @param {Object} ctx - SillyTavern context
+ * @returns {boolean} 이미 존재하면 true
+ */
+function isUrlAlreadyInChat(url, ctx) {
+    if (!url || !ctx?.chat) return false;
+    const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+    return chat.some(msg => {
+        const mes = String(msg?.mes || '');
+        return mes.includes(url);
+    });
 }
 
 /**
@@ -2141,6 +2164,11 @@ async function generateMessageImageViaApi(imagePrompt) {
             const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${imagePrompt}`, { showOutput: false });
             const resultStr = String(result?.pipe || result || '').trim();
             if (resultStr && (resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:'))) {
+                // C2: Reject URLs that already exist in chat history to prevent reuse
+                if (isUrlAlreadyInChat(resultStr, ctx)) {
+                    console.warn('[ST-LifeSim] 이미지 URL이 이미 채팅에 존재합니다. 재사용 방지를 위해 거부합니다.');
+                    return '';
+                }
                 return resultStr;
             }
         }

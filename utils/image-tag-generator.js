@@ -36,8 +36,8 @@ const MODEL_KEY_BY_SOURCE = {
 const TAG_CONVERSION_PROMPT = [
     'Convert the following image description into Danbooru-style English tags.',
     'Output ONLY comma-separated tags. No sentences, no Korean, no explanation.',
-    'Use spaces instead of underscores inside tags whenever possible.',
-    'Example output: 1girl, selfie, looking_at_viewer, phone_in_hand, casual_smile, indoor, upper_body',
+    'Replace underscores with spaces in all tags.',
+    'Example output: 1girl, selfie, looking at viewer, phone in hand, casual smile, indoor, upper body',
     '',
     'Description:',
 ].join('\n');

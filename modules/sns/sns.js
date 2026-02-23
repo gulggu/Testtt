@@ -285,6 +285,18 @@ function getAuthorDefaultImageUrl(authorName, includeLegacy = true) {
 }
 
 /**
+ * C2: 최근 SNS 피드에 이미 존재하는 이미지 URL인지 확인한다.
+ * 이전에 생성된 이미지 URL을 재사용하는 버그를 방지한다.
+ * @param {string} url - 확인할 이미지 URL
+ * @returns {boolean} 이미 존재하면 true
+ */
+function isUrlAlreadyInFeed(url) {
+    if (!url) return false;
+    const feed = loadFeed();
+    return feed.some(post => post?.imageUrl === url);
+}
+
+/**
  * 이미지 생성 API를 사용하여 실제 이미지를 생성한다.
  * SillyTavern의 /sd 슬래시 커맨드를 사용한다.
  * @param {string} imagePrompt - 이미지 생성에 사용할 프롬프트
@@ -304,6 +316,11 @@ async function generateImageViaApi(imagePrompt) {
             const resultStr = String(result?.pipe || result || '').trim();
             // 결과가 URL-like 문자열이면 반환
             if (resultStr && (resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:'))) {
+                // C2: Reject URLs that already exist in the SNS feed to prevent reuse
+                if (isUrlAlreadyInFeed(resultStr)) {
+                    console.warn('[ST-LifeSim] SNS 이미지 URL이 이미 피드에 존재합니다. 재사용 방지를 위해 거부합니다.');
+                    return '';
+                }
                 return resultStr;
             }
         }
