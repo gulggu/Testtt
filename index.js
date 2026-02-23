@@ -22,13 +22,13 @@ import { exportAllData, importAllData, clearAllData } from './utils/storage.js';
 import { renderTimeDividerUI, renderReadReceiptUI, renderNoContactUI, renderEventGeneratorUI, renderVoiceMemoUI, triggerQuickSend, triggerReadReceipt, triggerNoContact, triggerUserImageGenerationAndSend } from './modules/quick-tools/quick-tools.js';
 import { startFirstMsgTimer, renderFirstMsgSettingsUI } from './modules/firstmsg/firstmsg.js';
 import { initEmoticon, openEmoticonPopup } from './modules/emoticon/emoticon.js';
-import { initContacts, openContactsPopup, getAppearanceTagsByName, collectAppearanceTagsFromText } from './modules/contacts/contacts.js';
+import { initContacts, openContactsPopup, getContacts, getAppearanceTagsByName } from './modules/contacts/contacts.js';
 import { initCall, onCharacterMessageRenderedForProactiveCall, openCallLogsPopup, triggerProactiveIncomingCall, requestActiveCharacterCall } from './modules/call/call.js';
 import { initWallet, openWalletPopup } from './modules/wallet/wallet.js';
 import { initSns, openSnsPopup, triggerNpcPosting, triggerPendingCommentReaction, hasPendingCommentReaction } from './modules/sns/sns.js';
 import { initCalendar, openCalendarPopup } from './modules/calendar/calendar.js';
 import { initGifticon, openGifticonPopup, trackGifticonUsageFromCharacterMessage } from './modules/gifticon/gifticon.js';
-import { generateDanbooruTags, buildImageApiPrompt, containsKorean } from './utils/image-tag-generator.js';
+import { generateImageTags } from './utils/image-tag-generator.js';
 
 // 설정 키
 const SETTINGS_KEY = 'st-lifesim';
@@ -111,7 +111,7 @@ const DEFAULT_SETTINGS = {
     snsImageMode: false, // SNS 게시물 이미지 자동 생성 여부
     messageImageGenerationMode: false, // 메신저 이미지 자동 생성 여부 (ON: 이미지 API로 생성, OFF: 줄글 텍스트)
     messageImageTextTemplate: '[사진: {description}]', // OFF일 때 줄글 형식 커스텀 템플릿
-    messageImageInjectionPrompt: '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation, insert a <pic prompt="image description in English for stable diffusion"> tag at that point in your response.\nThink about whether the current context calls for a photo — not only when someone explicitly says "photo" or "picture," but also when the situation naturally suggests one (e.g., {{user}} asks {{char}} to pose, {{char}} wants to show something, a visually interesting moment occurs).\nRules:\n1) Default subject is {{char}} only. Always include {{char}}\'s name explicitly in the prompt.\n2) If other characters from the contacts are involved, include their names explicitly.\n3) Include {{user}} only when the context explicitly says both are together or the photo is clearly about {{user}}.\n4) Do not mix appearance traits of multiple people unless the scene explicitly includes multiple people.\n5) Keep the prompt visual and concise.\n6) Each <pic> tag must describe a NEW unique scene. Never reuse or reference a previously generated image URL.\n</image_generation_rule>',
+    messageImageInjectionPrompt: '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation, insert a <pic prompt="image description in English for stable diffusion"> tag at that point in your response.\nThink about whether the current context calls for a photo — not only when someone explicitly says "photo" or "picture," but also when the situation naturally suggests one (e.g., {{user}} asks {{char}} to pose or make a V sign, {{char}} wants to show something, a visually interesting moment occurs, {{user}} asks about {{char}}\'s current appearance or activity).\nRules:\n1) Default subject is {{char}} only. Always include {{char}}\'s name explicitly in the prompt.\n2) If other characters from the contacts are involved, include their names explicitly so their appearance can be resolved.\n3) Include {{user}} only when the context explicitly says both are together or the photo is clearly about {{user}}. Use {{user}}\'s name explicitly.\n4) Do not mix appearance traits of multiple people unless the scene explicitly includes multiple people.\n5) Keep the prompt visual and concise using Danbooru-style tag concepts.\n6) Each <pic> tag MUST describe a completely NEW unique scene. NEVER reuse, reference, or modify a previously generated image URL from the conversation. Always write a fresh description.\n7) Analyze visual intent from context — if the user implies a visual action (e.g., "do a V sign", "show me your outfit"), generate a <pic> tag even without the word "photo".\n</image_generation_rule>',
     snsImagePrompt: 'Create a photorealistic image for {authorName}\'s SNS post. Character appearance: {appearanceTags}. Post content: "{postContent}". The image must accurately depict the scene described in the post. Focus on matching the subject, setting, and mood of the post text. Style: casual daily-life smartphone photo, natural lighting, candid feel. Use Danbooru-style concepts and prefer spaces instead of underscores.',
     messageImagePrompt: 'Generate a photorealistic image that {charName} would send via messenger. Character appearance: {appearanceTags}. The image must reflect the character\'s physical appearance accurately based on the appearance tags. Style: personal candid photo matching the conversation context, natural and authentic feel. Use Danbooru-style concepts and prefer spaces instead of underscores.',
     characterAppearanceTags: {}, // { [charName]: "tag1, tag2" }
@@ -156,6 +156,10 @@ const DEFAULT_SETTINGS = {
     },
     quickAccess: {
         enabled: true,
+        columns: 1,             // 1, 2, or 3 column layout
+        displayMode: 'full',    // 'full' | 'emojiOnly' | 'labelOnly'
+        customLabels: {},       // { [key]: string } - custom display names
+        customImages: {},       // { [key]: string } - image URL replacement for emoji
         order: ['userImage', 'callRequest', 'readReceipt', 'noContact', 'sns', 'quickSend'],
         items: {
             userImage: true,
@@ -333,6 +337,8 @@ function getSettings() {
             ...DEFAULT_SETTINGS.quickAccess,
             order: [...DEFAULT_SETTINGS.quickAccess.order],
             items: { ...DEFAULT_SETTINGS.quickAccess.items },
+            customLabels: {},
+            customImages: {},
         };
     }
     if (ext[SETTINGS_KEY].quickAccess.items == null) {
@@ -343,6 +349,19 @@ function getSettings() {
     }
     if (typeof ext[SETTINGS_KEY].quickAccess.enabled !== 'boolean') {
         ext[SETTINGS_KEY].quickAccess.enabled = DEFAULT_SETTINGS.quickAccess.enabled;
+    }
+    // 신규: 퀵 액세스 커스터마이징 설정 마이그레이션
+    if (![1, 2, 3].includes(ext[SETTINGS_KEY].quickAccess.columns)) {
+        ext[SETTINGS_KEY].quickAccess.columns = DEFAULT_SETTINGS.quickAccess.columns;
+    }
+    if (!['full', 'emojiOnly', 'labelOnly'].includes(ext[SETTINGS_KEY].quickAccess.displayMode)) {
+        ext[SETTINGS_KEY].quickAccess.displayMode = DEFAULT_SETTINGS.quickAccess.displayMode;
+    }
+    if (!ext[SETTINGS_KEY].quickAccess.customLabels || typeof ext[SETTINGS_KEY].quickAccess.customLabels !== 'object') {
+        ext[SETTINGS_KEY].quickAccess.customLabels = {};
+    }
+    if (!ext[SETTINGS_KEY].quickAccess.customImages || typeof ext[SETTINGS_KEY].quickAccess.customImages !== 'object') {
+        ext[SETTINGS_KEY].quickAccess.customImages = {};
     }
     const qaOrder = ext[SETTINGS_KEY].quickAccess.order
         .map(v => String(v || '').trim())
@@ -456,17 +475,43 @@ function openQuickAccessPopup() {
     };
     wrapper.appendChild(mainBtn);
     const quickItems = settings.quickAccess?.enabled ? getOrderedQuickAccessItems() : [];
-    quickItems.forEach((item) => {
-        const btn = document.createElement('button');
-        btn.className = 'slm-btn slm-btn-secondary';
-        btn.textContent = `${item.icon} ${item.label}`;
-        btn.onclick = async () => {
-            closePopup('quick-access-menu');
-            await item.action();
-        };
-        wrapper.appendChild(btn);
-    });
-    if (quickItems.length === 0) {
+    const columns = settings.quickAccess?.columns || 1;
+    const displayMode = settings.quickAccess?.displayMode || 'full';
+    const customLabels = settings.quickAccess?.customLabels || {};
+    const customImages = settings.quickAccess?.customImages || {};
+    if (quickItems.length > 0) {
+        const grid = document.createElement('div');
+        grid.className = `slm-qa-grid slm-qa-cols-${columns}`;
+        quickItems.forEach((item) => {
+            const btn = document.createElement('button');
+            btn.className = `slm-qa-btn slm-qa-mode-${displayMode}`;
+            const label = customLabels[item.key] || item.label;
+            const imgUrl = customImages[item.key] || '';
+            if (displayMode === 'emojiOnly') {
+                if (imgUrl) {
+                    btn.innerHTML = `<img src="${escapeHtml(imgUrl)}" alt="${escapeHtml(label)}" class="slm-qa-img">`;
+                } else {
+                    btn.textContent = item.icon;
+                }
+                btn.title = label;
+            } else if (displayMode === 'labelOnly') {
+                btn.textContent = label;
+            } else {
+                // full mode
+                if (imgUrl) {
+                    btn.innerHTML = `<img src="${escapeHtml(imgUrl)}" alt="" class="slm-qa-img"> <span>${escapeHtml(label)}</span>`;
+                } else {
+                    btn.textContent = `${item.icon} ${label}`;
+                }
+            }
+            btn.onclick = async () => {
+                closePopup('quick-access-menu');
+                await item.action();
+            };
+            grid.appendChild(btn);
+        });
+        wrapper.appendChild(grid);
+    } else {
         wrapper.appendChild(Object.assign(document.createElement('div'), {
             className: 'slm-desc',
             textContent: settings.quickAccess?.enabled === false
@@ -789,16 +834,85 @@ function openSettingsPanel(onBack) {
 
         wrapper.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
 
-        // 개별 항목 표시/숨김 + 순서
+        // ── 커스터마이징: 열 수 설정 ──
+        const colTitle = Object.assign(document.createElement('div'), {
+            className: 'slm-label',
+            textContent: '🔲 레이아웃 (열 수)',
+        });
+        colTitle.style.fontWeight = '600';
+        colTitle.style.marginBottom = '6px';
+        wrapper.appendChild(colTitle);
+
+        const colRow = document.createElement('div');
+        colRow.className = 'slm-settings-row';
+        colRow.style.display = 'flex';
+        colRow.style.gap = '8px';
+        [1, 2, 3].forEach((n) => {
+            const btn = document.createElement('button');
+            btn.className = 'slm-btn slm-btn-sm' + ((settings.quickAccess?.columns || 1) === n ? ' slm-btn-primary' : ' slm-btn-ghost');
+            btn.textContent = `${n}열`;
+            btn.onclick = () => {
+                if (!settings.quickAccess) settings.quickAccess = { ...DEFAULT_SETTINGS.quickAccess };
+                settings.quickAccess.columns = n;
+                saveSettings();
+                refreshQuickAccessFab();
+                // 버튼 상태 갱신
+                colRow.querySelectorAll('button').forEach((b, i) => {
+                    b.className = 'slm-btn slm-btn-sm' + (i + 1 === n ? ' slm-btn-primary' : ' slm-btn-ghost');
+                });
+            };
+            colRow.appendChild(btn);
+        });
+        wrapper.appendChild(colRow);
+
+        // ── 커스터마이징: 표시 모드 ──
+        const modeTitle = Object.assign(document.createElement('div'), {
+            className: 'slm-label',
+            textContent: '🎭 표시 모드',
+        });
+        modeTitle.style.fontWeight = '600';
+        modeTitle.style.marginTop = '12px';
+        modeTitle.style.marginBottom = '6px';
+        wrapper.appendChild(modeTitle);
+
+        const modeRow = document.createElement('div');
+        modeRow.className = 'slm-settings-row';
+        modeRow.style.display = 'flex';
+        modeRow.style.gap = '8px';
+        const modes = [
+            { key: 'full', label: '이모지+텍스트' },
+            { key: 'emojiOnly', label: '이모지만' },
+            { key: 'labelOnly', label: '텍스트만' },
+        ];
+        modes.forEach((m) => {
+            const btn = document.createElement('button');
+            btn.className = 'slm-btn slm-btn-sm' + ((settings.quickAccess?.displayMode || 'full') === m.key ? ' slm-btn-primary' : ' slm-btn-ghost');
+            btn.textContent = m.label;
+            btn.onclick = () => {
+                if (!settings.quickAccess) settings.quickAccess = { ...DEFAULT_SETTINGS.quickAccess };
+                settings.quickAccess.displayMode = m.key;
+                saveSettings();
+                refreshQuickAccessFab();
+                modeRow.querySelectorAll('button').forEach((b, i) => {
+                    b.className = 'slm-btn slm-btn-sm' + (modes[i].key === m.key ? ' slm-btn-primary' : ' slm-btn-ghost');
+                });
+            };
+            modeRow.appendChild(btn);
+        });
+        wrapper.appendChild(modeRow);
+
+        wrapper.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
+
+        // ── 개별 항목 표시/숨김 + 순서 + 커스텀 이름/이미지 ──
         const itemsTitle = document.createElement('div');
         itemsTitle.className = 'slm-label';
-        itemsTitle.textContent = '⚡ 퀵 액세스 항목 표시/순서 설정';
+        itemsTitle.textContent = '⚡ 퀵 액세스 항목 설정';
         itemsTitle.style.fontWeight = '600';
         itemsTitle.style.marginBottom = '6px';
         wrapper.appendChild(itemsTitle);
         const hint = Object.assign(document.createElement('div'), {
             className: 'slm-desc',
-            textContent: '항목을 드래그하여 순서를 변경할 수 있습니다.',
+            textContent: '항목을 드래그하여 순서를 변경하고, 표시명과 이미지를 커스텀할 수 있습니다.',
         });
         wrapper.appendChild(hint);
 
@@ -814,7 +928,7 @@ function openSettingsPanel(onBack) {
                 .forEach(item => ordered.push(item));
             ordered.forEach((item) => {
                 const row = document.createElement('div');
-                row.className = 'slm-settings-row';
+                row.className = 'slm-settings-row slm-qa-settings-item';
                 row.draggable = true;
                 row.dataset.qaKey = item.key;
 
@@ -837,6 +951,11 @@ function openSettingsPanel(onBack) {
                     renderItems();
                 });
 
+                // 체크박스 + 기본 이름
+                const headerRow = document.createElement('div');
+                headerRow.style.display = 'flex';
+                headerRow.style.alignItems = 'center';
+                headerRow.style.gap = '6px';
                 const lbl = document.createElement('label');
                 lbl.className = 'slm-toggle-label';
                 const chk = document.createElement('input');
@@ -851,7 +970,49 @@ function openSettingsPanel(onBack) {
                 };
                 lbl.appendChild(chk);
                 lbl.appendChild(document.createTextNode(` ${item.icon} ${item.label}`));
-                row.appendChild(lbl);
+                headerRow.appendChild(lbl);
+                row.appendChild(headerRow);
+
+                // 커스텀 표시명 입력
+                const labelInput = document.createElement('input');
+                labelInput.type = 'text';
+                labelInput.className = 'slm-input slm-qa-custom-input';
+                labelInput.placeholder = '커스텀 표시명 (비워두면 기본값)';
+                labelInput.setAttribute('aria-label', `${item.label} 커스텀 표시명`);
+                labelInput.value = settings.quickAccess?.customLabels?.[item.key] || '';
+                labelInput.oninput = () => {
+                    if (!settings.quickAccess) settings.quickAccess = { ...DEFAULT_SETTINGS.quickAccess };
+                    if (!settings.quickAccess.customLabels) settings.quickAccess.customLabels = {};
+                    const v = labelInput.value.trim();
+                    if (v) {
+                        settings.quickAccess.customLabels[item.key] = v;
+                    } else {
+                        delete settings.quickAccess.customLabels[item.key];
+                    }
+                    saveSettings();
+                };
+                row.appendChild(labelInput);
+
+                // 커스텀 이미지 URL 입력 (이모지 대체)
+                const imgInput = document.createElement('input');
+                imgInput.type = 'text';
+                imgInput.className = 'slm-input slm-qa-custom-input';
+                imgInput.placeholder = '이모지 대체 이미지 URL (비워두면 이모지 사용)';
+                imgInput.setAttribute('aria-label', `${item.label} 이모지 대체 이미지 URL`);
+                imgInput.value = settings.quickAccess?.customImages?.[item.key] || '';
+                imgInput.oninput = () => {
+                    if (!settings.quickAccess) settings.quickAccess = { ...DEFAULT_SETTINGS.quickAccess };
+                    if (!settings.quickAccess.customImages) settings.quickAccess.customImages = {};
+                    const v = imgInput.value.trim();
+                    if (v) {
+                        settings.quickAccess.customImages[item.key] = v;
+                    } else {
+                        delete settings.quickAccess.customImages[item.key];
+                    }
+                    saveSettings();
+                };
+                row.appendChild(imgInput);
+
                 list.appendChild(row);
             });
         };
@@ -2048,12 +2209,19 @@ function hasExplicitImageIntentAroundLatestMessage() {
         /photo|picture|pic|image|selfie|screenshot|send\s+(me\s+)?(a\s+)?(photo|picture|pic|image)|show\s+(me\s+)?(a\s+)?(photo|picture|pic|image)/i,
         /브이\s*해|포즈.*(잡아|취해|해줘)|찍어\s*줘|인증.*샷|보여\s*줘/i,
         /take\s+(a\s+)?(photo|pic|selfie|picture)|pose\s+for/i,
+        // C1: Implicit visual intent — user requests a visual action without explicitly saying "photo"
+        /v\s*sign|peace\s*sign|손가락|브이|윙크|wink|미소.*지어|smile\s+for|손\s*흔들|wave/i,
+        /어떤\s*표정|어떻게\s*생겼|입고\s*있|wearing|옷.*보여|outfit|look\s+like/i,
+        /어디\s*있|where\s+are\s+you|뭐\s*하고\s*있|what\s+are\s+you\s+doing|지금\s*모습/i,
     ];
     const charSendIntentPatterns = [
         /사진.*(보낼게|보내줄게|찍어줄게|첨부|보여줄게)|이미지.*(보낼게|보내줄게|첨부|보여줄게)|셀카.*(보낼게|보내줄게)/i,
         /here['’]?s\s+(a\s+)?(photo|picture|pic|image)|i['’]ll\s+send\s+(you\s+)?(a\s+)?(photo|picture|pic|image)|let\s+me\s+show/i,
         /찍어\s*봤|찍었|보내\s*줄게|올려\s*줄게|보여\s*줄게|보낼\s*거/i,
         /took\s+(a\s+)?(photo|pic|selfie|picture)|check\s+this\s+out|look\s+at\s+this/i,
+        // C1: Implicit visual intent — character describes a visual action that implies an image
+        /v\s*sign|peace\s*sign|브이.*했|윙크.*했|wink|미소.*지었|smiled/i,
+        /찍어\s*봄|찍어봤|한\s*장.*찍|잠깐.*봐|이거\s*봐/i,
     ];
     return recentMessages.some((msg) => {
         const text = msg?.mes;
@@ -2110,7 +2278,7 @@ const PIC_TAG_REGEX = /<pic\s[^>]*?prompt="([^"]*)"[^>]*?\/?>/gi;
  * OFF: 주입을 제거하여 AI가 <pic> 태그를 출력하지 않도록 한다
  */
 // OFF 모드 이미지 프롬프트 — AI가 사진 상황을 <pic> 태그로 표시하되, 실제 생성은 하지 않음
-const MSG_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation, insert a <pic prompt="image description in Korean for the photo situation"> tag at that point in your response.\nThink about whether the current context calls for a photo — not only when someone explicitly says "photo" or "picture," but also when the situation naturally suggests one.\nRules:\n1) Default subject is {{char}} only. Always include {{char}}\'s name explicitly.\n2) If other characters from the contacts are involved, include their names explicitly.\n3) Include {{user}} only when context explicitly indicates both are together or the photo is focused on {{user}}.\n4) Do not mix unrelated character appearance traits.\n5) Keep the situation brief and visual.\n6) Each <pic> tag must describe a NEW unique scene. Never reuse or reference a previously generated image URL.\n</image_generation_rule>';
+const MSG_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen {{char}} would naturally send a photo or picture in the conversation, insert a <pic prompt="image description in Korean for the photo situation"> tag at that point in your response.\nThink about whether the current context calls for a photo — not only when someone explicitly says "photo" or "picture," but also when the situation naturally suggests one (e.g., {{user}} asks {{char}} to pose, make a gesture, or show something).\nRules:\n1) Default subject is {{char}} only. Always include {{char}}\'s name explicitly.\n2) If other characters from the contacts are involved, include their names explicitly.\n3) Include {{user}} only when context explicitly indicates both are together or the photo is focused on {{user}}. Use {{user}}\'s name explicitly.\n4) Do not mix unrelated character appearance traits.\n5) Keep the situation brief and visual.\n6) Each <pic> tag MUST describe a completely NEW unique scene. NEVER reuse, reference, or modify a previously generated image URL from the conversation.\n7) Analyze visual intent from context — if the user implies a visual action, generate a <pic> tag even without the word "photo".\n</image_generation_rule>';
 
 function updateMessageImageInjection() {
     const ctx = getContext();
@@ -2124,6 +2292,22 @@ function updateMessageImageInjection() {
         // (이후 텍스트로 변환 처리됨)
         ctx.setExtensionPrompt(MSG_IMAGE_INJECT_TAG, MSG_IMAGE_OFF_PROMPT, 1, 0);
     }
+}
+
+/**
+ * C2: 채팅 기록에 이미 존재하는 이미지 URL인지 확인한다.
+ * 이전에 생성된 이미지 URL을 재사용하는 버그를 방지한다.
+ * @param {string} url - 확인할 이미지 URL
+ * @param {Object} ctx - SillyTavern context
+ * @returns {boolean} 이미 존재하면 true
+ */
+function isUrlAlreadyInChat(url, ctx) {
+    if (!url || !ctx?.chat) return false;
+    const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+    return chat.some(msg => {
+        const mes = String(msg?.mes || '');
+        return mes.includes(url);
+    });
 }
 
 /**
@@ -2141,6 +2325,11 @@ async function generateMessageImageViaApi(imagePrompt) {
             const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${imagePrompt}`, { showOutput: false });
             const resultStr = String(result?.pipe || result || '').trim();
             if (resultStr && (resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:'))) {
+                // C2: Reject URLs that already exist in chat history to prevent reuse
+                if (isUrlAlreadyInChat(resultStr, ctx)) {
+                    console.warn('[ST-LifeSim] 이미지 URL이 이미 채팅에 존재합니다. 재사용 방지를 위해 거부합니다.');
+                    return '';
+                }
                 return resultStr;
             }
         }
@@ -2178,15 +2367,10 @@ async function applyCharacterImageDisplayMode() {
 
     if (allowAutoImageGeneration) {
         // ── ON 모드: 이미지 생성 API로 실제 이미지 생성 ──
+        // 통합 파이프라인: generateImageTags() → Image API
         showToast(`📷 ${picMatches.length}개 이미지 생성 중...`, 'info', 2000);
-        const appearanceTags = getAppearanceTagsByName(charName) || settings.characterAppearanceTags?.[charName] || '';
         const userName = ctx?.name1 || '';
-        const userAppearanceTags = getAppearanceTagsByName(userName) || settings.characterAppearanceTags?.['{{user}}'] || '';
-        const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const userNameRegex = userName ? new RegExp(escapeRegex(userName.toLowerCase())) : null;
-        const charNameRegex = charName ? new RegExp(escapeRegex(charName.toLowerCase())) : null;
-        const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
-        const charHintRegex = /\bchar\b|{{char}}|캐릭터/;
+        const allContactsList = [...getContacts('character'), ...getContacts('chat')];
         for (const match of picMatches) {
             const fullTag = match[0];
             const rawPrompt = (match[1] || '').trim();
@@ -2195,38 +2379,26 @@ async function applyCharacterImageDisplayMode() {
                 replacements.push({ index: matchIndex, length: fullTag.length, replacement: '' });
                 continue;
             }
-            const promptLower = rawPrompt.toLowerCase();
-            const mentionsUser = userHintRegex.test(promptLower)
-                || (!!userNameRegex && userNameRegex.test(promptLower));
-            const mentionsChar = charHintRegex.test(promptLower)
-                || (!!charNameRegex && charNameRegex.test(promptLower));
-            const tags = collectAppearanceTagsFromText(rawPrompt, { includeNames: [charName] });
-            if (mentionsUser && userAppearanceTags) unshiftUniqueTagGroup(tags, userAppearanceTags);
-            // char의 외모태그를 항상 보장 (pushUniqueTagGroup이 중복을 방지)
-            if (appearanceTags) pushUniqueTagGroup(tags, appearanceTags);
-            const tagsToUse = tags.join(' | ');
-            // STEP 1-2: Danbooru 태그 생성 (한국어 → 영어 태그 변환)
-            // 메시지 이미지 프롬프트(커스텀)를 태그 생성 컨텍스트로 함께 전달
-            const messageImageCustomPrompt = (settings.messageImagePrompt || DEFAULT_SETTINGS.messageImagePrompt)
-                .replace(/\{charName\}/g, charName)
-                .replace(/\{appearanceTags\}/g, tagsToUse);
-            let danbooruTags = '';
-            try {
-                danbooruTags = await generateDanbooruTags(rawPrompt, { customPrompt: messageImageCustomPrompt });
-            } catch (tagErr) {
-                console.warn('[ST-LifeSim] Danbooru 태그 생성 실패:', tagErr);
+            // 통합 이미지 태그 생성 (커스텀 프롬프트 없이 캐릭터 컨텍스트 기반)
+            const includeNames = [charName];
+            // user hint 감지 시 유저도 포함
+            const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
+            if (userName && userHintRegex.test(rawPrompt.toLowerCase())) {
+                includeNames.push(userName);
             }
+            const tagResult = await generateImageTags(rawPrompt, {
+                includeNames,
+                contacts: allContactsList,
+                getAppearanceTagsByName,
+            });
             let replacement;
-            // 태그 생성 실패 시 이미지 생성 차단 → 줄글 폴백
-            if (!danbooruTags) {
+            if (!tagResult.finalPrompt) {
                 console.warn('[ST-LifeSim] 태그 생성 결과 없음, 줄글 형태로 출력합니다.');
                 const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
                 replacement = template.replace(/\{description\}/g, rawPrompt);
             } else {
-                // STEP 3: 생성된 태그 + 외모 태그 조합 → Image API 전달
-                const finalPrompt = buildImageApiPrompt(danbooruTags, tags);
                 try {
-                    const imageUrl = await generateMessageImageViaApi(finalPrompt);
+                    const imageUrl = await generateMessageImageViaApi(tagResult.finalPrompt);
                     if (imageUrl) {
                         const safeUrl = escapeHtml(imageUrl);
                         const safePrompt = escapeHtml(rawPrompt);
