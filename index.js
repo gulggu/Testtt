@@ -28,6 +28,7 @@ import { initWallet, openWalletPopup } from './modules/wallet/wallet.js';
 import { initSns, openSnsPopup, triggerNpcPosting, triggerPendingCommentReaction, hasPendingCommentReaction } from './modules/sns/sns.js';
 import { initCalendar, openCalendarPopup } from './modules/calendar/calendar.js';
 import { initGifticon, openGifticonPopup, trackGifticonUsageFromCharacterMessage } from './modules/gifticon/gifticon.js';
+import { generateDanbooruTags, buildImageApiPrompt, containsKorean } from './utils/image-tag-generator.js';
 
 // 설정 키
 const SETTINGS_KEY = 'st-lifesim';
@@ -1965,22 +1966,37 @@ async function applyCharacterImageDisplayMode() {
                 if (mentionsUser && userAppearanceTags) tags.push(userAppearanceTags);
             }
             const tagsToUse = tags.join(', ');
-            const prompt = tagsToUse ? `${rawPrompt}, ${tagsToUse}` : rawPrompt;
-            let replacement;
+            // STEP 1-2: Danbooru 태그 생성 (한국어 → 영어 태그 변환)
+            let danbooruTags = '';
             try {
-                const imageUrl = await generateMessageImageViaApi(prompt);
-                if (imageUrl) {
-                    const safeUrl = escapeHtml(imageUrl);
-                    const safePrompt = escapeHtml(rawPrompt);
-                    replacement = `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image" style="max-width:100%;border-radius:var(--slm-image-radius,10px);margin:4px 0">`;
-                } else {
+                danbooruTags = await generateDanbooruTags(rawPrompt);
+            } catch (tagErr) {
+                console.warn('[ST-LifeSim] Danbooru 태그 생성 실패:', tagErr);
+            }
+            let replacement;
+            // 태그 생성 실패 시 이미지 생성 차단 → 줄글 폴백
+            if (!danbooruTags) {
+                console.warn('[ST-LifeSim] 태그 생성 결과 없음, 줄글 형태로 출력합니다.');
+                const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
+                replacement = template.replace(/\{description\}/g, rawPrompt);
+            } else {
+                // STEP 3: 생성된 태그 + 외모 태그 조합 → Image API 전달
+                const finalPrompt = buildImageApiPrompt(danbooruTags, tagsToUse);
+                try {
+                    const imageUrl = await generateMessageImageViaApi(finalPrompt);
+                    if (imageUrl) {
+                        const safeUrl = escapeHtml(imageUrl);
+                        const safePrompt = escapeHtml(rawPrompt);
+                        replacement = `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image" style="max-width:100%;border-radius:var(--slm-image-radius,10px);margin:4px 0">`;
+                    } else {
+                        const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
+                        replacement = template.replace(/\{description\}/g, rawPrompt);
+                    }
+                } catch (err) {
+                    console.warn('[ST-LifeSim] 메신저 이미지 개별 생성 실패:', err);
                     const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
                     replacement = template.replace(/\{description\}/g, rawPrompt);
                 }
-            } catch (err) {
-                console.warn('[ST-LifeSim] 메신저 이미지 개별 생성 실패:', err);
-                const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
-                replacement = template.replace(/\{description\}/g, rawPrompt);
             }
             replacements.push({ index: matchIndex, length: fullTag.length, replacement });
         }

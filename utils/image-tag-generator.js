@@ -60,9 +60,16 @@ export async function generateDanbooruTags(rawPrompt) {
         let result = '';
 
         if (typeof context.generateRaw === 'function') {
-            result = await context.generateRaw(fullPrompt);
+            result = (await context.generateRaw({
+                prompt: fullPrompt,
+                quietToLoud: false,
+                trimNames: true,
+            }) || '').trim();
         } else if (typeof context.generateQuietPrompt === 'function') {
-            result = await context.generateQuietPrompt(fullPrompt);
+            result = (await context.generateQuietPrompt({
+                quietPrompt: fullPrompt,
+                quietName: 'danbooru-tag-gen',
+            }) || '').trim();
         } else {
             console.warn('[image-tag-generator] No generation API found on context.');
             return '';

@@ -14,6 +14,7 @@ import { registerContextBuilder } from '../../utils/context-inject.js';
 import { showToast, generateId } from '../../utils/ui.js';
 import { createPopup } from '../../utils/popup.js';
 import { getContacts, getAppearanceTagsByName } from '../contacts/contacts.js';
+import { generateDanbooruTags, buildImageApiPrompt } from '../../utils/image-tag-generator.js';
 
 const MODULE_KEY = 'sns-feed';
 const AVATARS_KEY = 'sns-avatars';
@@ -502,21 +503,31 @@ export async function triggerNpcPosting() {
                     .replace(/\{\{user\}\}/g, freshCtx?.name1 || '{{user}}')
                     .replace(/\{userAppearanceTags\}/g, userAppearanceTags)
                 : basePrompt;
-            const descPrompt = appearanceTags ? `${resolvedImagePrompt}\nAppearance tags: ${appearanceTags}` : resolvedImagePrompt;
-
-            // 이미지 API를 사용하여 실제 이미지 생성 시도
+            // Danbooru 태그 생성 → Image API 전달 (한국어 직접 전달 금지)
+            let danbooruTags = '';
             try {
-                const generatedUrl = await generateImageViaApi(descPrompt);
-                if (generatedUrl) {
-                    finalImageUrl = generatedUrl;
+                danbooruTags = await generateDanbooruTags(resolvedImagePrompt);
+            } catch (tagErr) {
+                console.warn('[ST-LifeSim] SNS Danbooru 태그 생성 실패:', tagErr);
+            }
+
+            if (danbooruTags) {
+                const finalApiPrompt = buildImageApiPrompt(danbooruTags, appearanceTags);
+                try {
+                    const generatedUrl = await generateImageViaApi(finalApiPrompt);
+                    if (generatedUrl) {
+                        finalImageUrl = generatedUrl;
+                    }
+                } catch (imgErr) {
+                    console.warn('[ST-LifeSim] SNS 이미지 생성 실패, 기본 이미지 사용:', imgErr);
                 }
-            } catch (imgErr) {
-                console.warn('[ST-LifeSim] SNS 이미지 생성 실패, 기본 이미지 사용:', imgErr);
+            } else {
+                console.warn('[ST-LifeSim] SNS 태그 생성 결과 없음, 이미지 생성 건너뜀');
             }
 
             // 이미지 설명 텍스트 생성
             if (typeof freshCtx.generateQuietPrompt === 'function' || typeof freshCtx.generateRaw === 'function') {
-                imageDescription = normalizeSnsText(await generateSnsText(freshCtx, enforceSnsLanguage(descPrompt, authorLanguage), `${pick.name}-image-desc`), SNS_IMAGE_DESC_MAX);
+                imageDescription = normalizeSnsText(await generateSnsText(freshCtx, enforceSnsLanguage(resolvedImagePrompt, authorLanguage), `${pick.name}-image-desc`), SNS_IMAGE_DESC_MAX);
             }
         }
         if (!imageDescription && inlineCaption) imageDescription = inlineCaption;
