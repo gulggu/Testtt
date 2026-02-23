@@ -618,6 +618,7 @@ async function generateUserImage(prompt) {
         const danbooruTags = await generateDanbooruTags(prompt.trim());
         if (!danbooruTags) {
             console.warn('[ST-LifeSim] 유저 이미지 Danbooru 태그 생성 실패, 이미지 생성 건너뜀');
+            showToast('이미지 태그 변환 실패: 이미지 생성을 건너뜁니다', 'warn', 2500);
             return '';
         }
 

@@ -462,11 +462,16 @@ function injectQuickAccessFab() {
         fab.classList.toggle('slm-qa-fab-open', !isOpen);
     });
 
-    // 외부 클릭 시 닫기
-    document.addEventListener('click', () => {
+    // 외부 클릭 시 닫기 (container가 DOM에 있을 때만 동작)
+    const closeOnOutsideClick = () => {
+        if (!document.body.contains(container)) {
+            document.removeEventListener('click', closeOnOutsideClick);
+            return;
+        }
         list.style.display = 'none';
         fab.classList.remove('slm-qa-fab-open');
-    });
+    };
+    document.addEventListener('click', closeOnOutsideClick);
     container.addEventListener('click', (e) => e.stopPropagation());
 
     container.appendChild(list);

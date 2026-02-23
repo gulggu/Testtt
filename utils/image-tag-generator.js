@@ -135,6 +135,8 @@ function sanitizeTags(raw) {
 
 /**
  * Return trimmed tag string only if it is non-empty and Korean-free.
+ * Appearance tags are expected to be English (e.g. "long hair, school uniform").
+ * If Korean is found, it's discarded to enforce the no-Korean-to-Image-API rule.
  * @param {string} tags
  * @returns {string}
  */
