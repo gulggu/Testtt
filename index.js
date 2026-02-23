@@ -978,6 +978,7 @@ function openSettingsPanel(onBack) {
                 labelInput.type = 'text';
                 labelInput.className = 'slm-input slm-qa-custom-input';
                 labelInput.placeholder = '커스텀 표시명 (비워두면 기본값)';
+                labelInput.setAttribute('aria-label', `${item.label} 커스텀 표시명`);
                 labelInput.value = settings.quickAccess?.customLabels?.[item.key] || '';
                 labelInput.oninput = () => {
                     if (!settings.quickAccess) settings.quickAccess = { ...DEFAULT_SETTINGS.quickAccess };
@@ -997,6 +998,7 @@ function openSettingsPanel(onBack) {
                 imgInput.type = 'text';
                 imgInput.className = 'slm-input slm-qa-custom-input';
                 imgInput.placeholder = '이모지 대체 이미지 URL (비워두면 이모지 사용)';
+                imgInput.setAttribute('aria-label', `${item.label} 이모지 대체 이미지 URL`);
                 imgInput.value = settings.quickAccess?.customImages?.[item.key] || '';
                 imgInput.oninput = () => {
                     if (!settings.quickAccess) settings.quickAccess = { ...DEFAULT_SETTINGS.quickAccess };
