@@ -601,7 +601,7 @@ function injectRightSendFormIcons() {
 
     const settings = getSettings();
     const rsfItems = settings.quickAccess?.rightSendFormItems || {};
-    const activeKeys = Object.keys(rsfItems).filter(k => rsfItems[k]);
+    const activeKeys = Object.keys(rsfItems).filter(k => rsfItems[k] && k === 'callRequest');
     if (activeKeys.length === 0) return;
 
     const sendBtn = document.getElementById('send_but');
@@ -1174,7 +1174,8 @@ function openSettingsPanel(onBack) {
                 imgRow.appendChild(imgInput);
                 row.appendChild(imgRow);
 
-                // RightSendForm에 아이콘 추가 옵션
+                // RightSendForm에 아이콘 추가 옵션 (통화 요청 아이콘만 지원)
+                if (item.key === 'callRequest') {
                 const rsfRow = document.createElement('div');
                 rsfRow.className = 'slm-input-row slm-qa-settings-field-row';
                 rsfRow.style.marginTop = '2px';
@@ -1199,6 +1200,7 @@ function openSettingsPanel(onBack) {
                 rsfLbl.appendChild(document.createTextNode(' 입력창 옆에 아이콘 추가'));
                 rsfRow.appendChild(rsfLbl);
                 row.appendChild(rsfRow);
+                }
 
                 list.appendChild(row);
             });
