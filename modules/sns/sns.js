@@ -380,7 +380,7 @@ function getBuiltinCharAvatarUrl() {
     const fromData = String(char?.avatar || '').trim();
     if (fromData) {
         // avatar 필드가 파일이름만 있으면 /characters/ 경로를 붙인다
-        if (fromData && !fromData.startsWith('http') && !fromData.startsWith('/') && !fromData.startsWith('data:')) {
+        if (!fromData.startsWith('http') && !fromData.startsWith('/') && !fromData.startsWith('data:')) {
             return `/characters/${fromData}`;
         }
         return fromData;

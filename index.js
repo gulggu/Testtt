@@ -2202,7 +2202,7 @@ async function applyCharacterImageDisplayMode() {
                 || (!!charNameRegex && charNameRegex.test(promptLower));
             const tags = collectAppearanceTagsFromText(rawPrompt, { includeNames: [charName] });
             if (mentionsUser && userAppearanceTags) unshiftUniqueTagGroup(tags, userAppearanceTags);
-            // char의 외모태그가 collectAppearanceTagsFromText에서 이미 포함되지 않았으면 보장
+            // char의 외모태그를 항상 보장 (pushUniqueTagGroup이 중복을 방지)
             if (appearanceTags) pushUniqueTagGroup(tags, appearanceTags);
             const tagsToUse = tags.join(' | ');
             // STEP 1-2: Danbooru 태그 생성 (한국어 → 영어 태그 변환)
