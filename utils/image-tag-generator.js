@@ -80,25 +80,29 @@ function buildCharacterAwarePrompt(characters, appearanceVarMap) {
         '',
         'Given an image description and a list of known characters, generate ONLY scene/situation/composition tags.',
         'Character appearance tags (hair, eyes, clothing, body features) are handled automatically by the system — do NOT include them in your output.',
+        'The system will automatically append each character\'s full appearance description after your tags, separated by " | ".',
+        'Final prompt format (built by the system): <your scene tags> | <CharName>: <appearance> | <CharName2>: <appearance> ...',
         '',
         'RULES:',
         '1) Output ONLY comma-separated Danbooru-style tags. No sentences, no Korean, no explanation.',
         '2) Replace underscores with spaces in all tags.',
         '3) NEVER output character appearance, clothing, hair color, eye color, or body feature tags — the system appends them automatically. Do NOT fabricate or guess any character appearance details.',
         '4) DO NOT output any {{appearanceTag:...}} variables or references.',
-        '5) DO include character count tags: 1girl, 1boy, 2girls, 3boys, multiple boys, multiple girls, solo, etc.',
-        '6) Include scene/environment tags: cafe, outdoor, indoor, classroom, bedroom, park, street, etc.',
-        '7) Include pose/action tags: selfie, standing, sitting, looking at viewer, v sign, peace sign, holding phone, etc.',
-        '8) Include mood/lighting/framing tags: warm lighting, natural lighting, upper body, close-up, full body, photo (medium), portrait, etc.',
-        '9) Count characters from the known list when they are mentioned or implied in the description.',
-        '10) The entire output MUST be in English. No Korean or other languages.',
-        '11) Even if the description is vague (e.g. just a social media post text), infer a plausible visual scene and generate appropriate scene/composition tags.',
-        '12) Always include at least one framing tag (upper body, full body, close-up, portrait, etc.) and one setting tag (indoor, outdoor, etc.).',
+        '5) DO NOT use the pipe character "|" in your output. The system uses "|" as a separator.',
+        '6) DO include character count tags: 1girl, 1boy, 2girls, 3boys, multiple boys, multiple girls, solo, etc.',
+        '7) Include scene/environment tags: cafe, outdoor, indoor, classroom, bedroom, park, street, etc.',
+        '8) Include pose/action tags: selfie, standing, sitting, looking at viewer, v sign, peace sign, holding phone, etc.',
+        '9) Include mood/lighting/framing tags: warm lighting, natural lighting, upper body, close-up, full body, photo (medium), portrait, etc.',
+        '10) Count characters from the known list when they are mentioned or implied in the description.',
+        '11) The entire output MUST be in English. No Korean or other languages.',
+        '12) Even if the description is vague (e.g. just a social media post text), infer a plausible visual scene and generate appropriate scene/composition tags.',
+        '13) Always include at least one framing tag (upper body, full body, close-up, portrait, etc.) and one setting tag (indoor, outdoor, etc.).',
         '',
         'EXAMPLE:',
         '* Input: "Alice and Bob go to cafe"',
         '* Known characters: Alice (girl), Bob (boy)',
         '* Output: 1girl, 1boy, cafe, sitting, table, indoor, warm lighting, upper body',
+        '  (system then appends: | Alice: <appearance> | Bob: <appearance>)',
         '',
         'Known characters:',
         charList,
@@ -376,25 +380,23 @@ export async function generateImageTags(rawPrompt, options = {}) {
     );
     const resolvedSceneTags = resolveAppearanceTagRefs(sceneTags, Object.fromEntries(appearanceLookup));
 
-    // If AI output contains pipe-separated sections with resolved appearance tags,
-    // split them out into appearance groups
+    // If AI output contains pipe-separated sections, treat them all as scene tags.
+    // The AI is instructed NOT to use "|", but if it does, merge all sections back
+    // into a single comma-separated scene tag string.
     const pipeParts = resolvedSceneTags.split(/\s*\|\s*/).map(s => s.trim()).filter(Boolean);
-    let finalSceneTags = pipeParts[0] || resolvedSceneTags;
-    const aiAppearanceGroups = pipeParts.length > 1 ? pipeParts.slice(1) : [];
+    const finalSceneTags = pipeParts.join(', ');
 
-    // ── Step 4: Collect appearance tag groups ──
-    // Merge AI-extracted groups with matched character tags (deduplicate)
-    const seenAppearance = new Set(aiAppearanceGroups.map(g => g.toLowerCase()));
-    const extraGroups = matched
+    // ── Step 4: Collect appearance tag groups from ALL matched characters ──
+    // Character appearances are ALWAYS appended programmatically (pipe-separated)
+    // so the Image API receives: scene tags | Name1: appearance | Name2: appearance ...
+    const appearanceGroups = matched
         .map(c => {
             const name = String(c?.name || '').trim();
             const tags = String(c?.appearanceTags || '').trim();
             if (!name || !tags) return '';
             return `${name}: ${tags}`;
         })
-        .filter(Boolean)
-        .filter(g => !seenAppearance.has(g.toLowerCase()));
-    const appearanceGroups = [...aiAppearanceGroups, ...extraGroups];
+        .filter(Boolean);
 
     // ── Step 5: Build final prompt ──
     const finalPrompt = buildImageApiPrompt(finalSceneTags, appearanceGroups);

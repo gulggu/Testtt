@@ -85,6 +85,23 @@ function getContactDisplayName(contact) {
 }
 
 /**
+ * 유저 외모/서브이름 글로벌 프로필을 불러온다 (캐릭터 전환 시에도 유지)
+ * @returns {{ appearanceTags?: string, subName?: string }}
+ */
+function loadGlobalUserProfile() {
+    return loadData('user-profile', {}, 'global');
+}
+
+/**
+ * 유저 외모/서브이름 글로벌 프로필을 저장한다
+ * @param {{ appearanceTags?: string, subName?: string }} data
+ */
+function saveGlobalUserProfile(data) {
+    const existing = loadGlobalUserProfile();
+    saveData('user-profile', { ...existing, ...data }, 'global');
+}
+
+/**
  * {{char}} 연락처를 자동으로 추가한다 (아직 없는 경우에만)
  */
 function ensureCharContact() {
@@ -151,6 +168,7 @@ function ensureCharContact() {
  * {{user}} 연락처를 자동으로 추가한다 (character 바인딩, 외모 태그 전용)
  * - 선통화/SNS 등 자동 트리거에서는 제외되어야 한다
  * - 삭제 버튼 없어야 하며 캐릭터 바인딩이어야 한다
+ * - 외모 태그/서브이름은 글로벌 저장소에서 동기화하여 캐릭터 전환 시에도 유지
  */
 function ensureUserContact() {
     const ctx = getContext();
@@ -161,9 +179,17 @@ function ensureUserContact() {
     const contacts = loadContacts('character');
     const existing = contacts.find(c => c.isUserAuto || c.name === userName);
     const userAvatar = document.querySelector('#user_avatar_block .avatar.selected img')?.getAttribute('src') || '';
+    const globalProfile = loadGlobalUserProfile();
     if (existing) {
         existing.name = userName;
         existing.avatar = existing.avatar || userAvatar;
+        // 글로벌 프로필에서 외모 태그/서브이름 동기화 (로컬 값이 없을 때)
+        if (!existing.appearanceTags && globalProfile.appearanceTags) {
+            existing.appearanceTags = globalProfile.appearanceTags;
+        }
+        if (!existing.subName && globalProfile.subName) {
+            existing.subName = globalProfile.subName;
+        }
         existing.isUserAuto = true;
         existing.binding = 'character';
         saveContacts(contacts, 'character');
@@ -174,6 +200,7 @@ function ensureUserContact() {
         id: generateId(),
         name: userName,
         displayName: '',
+        subName: globalProfile.subName || '',
         avatar: userAvatar,
         description: '유저 (플레이어)',
         relationToUser: '본인',
@@ -181,7 +208,7 @@ function ensureUserContact() {
         personality: '',
         phone: '',
         tags: [],
-        appearanceTags: '',
+        appearanceTags: globalProfile.appearanceTags || '',
         binding: 'character',
         isUserAuto: true,
     });
@@ -572,6 +599,25 @@ function openContactDialog(existing, defaultBinding, onSave) {
             saveContacts(sourceContacts, sourceBinding);
         }
         saveContacts(targetContacts, targetBinding);
+
+        // 유저 자동 연락처: 외모 태그/서브이름을 글로벌에 동기화
+        if (isUserAuto) {
+            saveGlobalUserProfile({
+                appearanceTags: data.appearanceTags,
+                subName: data.subName,
+            });
+        }
+
+        // 채팅 바인딩 연락처의 서브이름을 캐릭터 바인딩 연락처에도 동기화
+        if (!isUserAuto && !isCharAuto && targetBinding === 'chat' && data.subName) {
+            const charContacts = loadContacts('character');
+            const charContact = charContacts.find(c => c.name === canonicalName);
+            if (charContact && charContact.subName !== data.subName) {
+                charContact.subName = data.subName;
+                saveContacts(charContacts, 'character');
+            }
+        }
+
         close();
         onSave();
         showToast(isEdit ? '연락처 수정 완료' : '연락처 추가 완료', 'success');
