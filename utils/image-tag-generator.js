@@ -177,9 +177,12 @@ export async function generateDanbooruTags(rawPrompt, options) {
     // Already looks like Danbooru tag-style English input — keep as-is to avoid unnecessary AI rewriting
     // (Natural-language prose with commas should still go through tag generation)
     const looksLikeDanbooruTagList = (() => {
+        const MIN_TAG_LIST_PARTS = 2;
+        const MAX_DANBOORU_TAG_LENGTH = 40;
         const parts = trimmed.split(',').map(s => s.trim()).filter(Boolean);
-        if (parts.length < 2 && !/\[[^\]]+:[^\]]+\]/.test(trimmed)) return false;
-        return parts.every(tag => tag.length > 0 && tag.length <= 40 && !/[.!?'"`]/.test(tag));
+        if (parts.length === 0) return false;
+        if (parts.length < MIN_TAG_LIST_PARTS && !/\[[^\]]+:[^\]]+\]/.test(trimmed)) return false;
+        return parts.every(tag => tag.length > 0 && tag.length <= MAX_DANBOORU_TAG_LENGTH && !/[.!?'"`]/.test(tag));
     })();
     if (!containsKorean(trimmed) && looksLikeDanbooruTagList) {
         return sanitizeTags(trimmed);
@@ -368,7 +371,6 @@ export async function generateImageTags(rawPrompt, options = {}) {
 
     // includeNames are explicit caller hints (e.g. current speaker/author), so force-include first.
     for (const name of includeNames) {
-        if (!name) continue;
         const cleanName = String(name).trim();
         if (!cleanName) continue;
         const normalized = cleanName.toLowerCase();
