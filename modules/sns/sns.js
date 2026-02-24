@@ -172,7 +172,7 @@ function getSnsPromptSettings() {
         templates,
         externalApiUrl: String(ext?.snsExternalApiUrl || '').trim(),
         externalApiTimeoutMs: Math.max(1000, Math.min(60000, Number(ext?.snsExternalApiTimeoutMs) || 12000)),
-        language: ['ko', 'en', 'ja', 'zh'].includes(ext?.snsLanguage) ? ext.snsLanguage : 'ko',
+        language: ['ko', 'en', 'ja', 'zh'].includes(ext?.snsLanguage) ? ext.snsLanguage : 'en',
         koreanTranslationPrompt: String(ext?.snsKoreanTranslationPrompt || 'Translate the following SNS text into natural Korean. Output Korean text only.\n{{text}}').trim(),
         snsImageMode: ext?.snsImageMode === true,
         snsImagePrompt: String(ext?.snsImagePrompt || '').trim(),
@@ -1794,7 +1794,7 @@ function openAvatarSettingsDialog(onUpdate) {
         if (!userIds[c.name]) userIds[c.name] = makeDefaultHandle(c.name);
         if (c.avatar && !avatars[c.name]) avatars[c.name] = c.avatar;
         if (c.name !== userName && postingEnabled[c.name] == null) postingEnabled[c.name] = true;
-        if (!['ko', 'en', 'ja', 'zh'].includes(authorLanguages[c.name])) authorLanguages[c.name] = 'ko';
+        if (!['ko', 'en', 'ja', 'zh'].includes(authorLanguages[c.name])) authorLanguages[c.name] = 'en';
         if (authorMinLikes[c.name] == null || Number.isNaN(Number(authorMinLikes[c.name]))) authorMinLikes[c.name] = 0;
     });
     saveUserIds(userIds);
