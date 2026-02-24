@@ -2539,20 +2539,27 @@ function saveSettings() {
 /**
  * 프롬프트 저장 버튼 클릭 시 사용하는 강제 저장 함수.
  * debounce 되지 않은 즉시 저장을 시도하고, 불가하면 debounced 저장 후 flush를 시도한다.
+ * @returns {boolean} 저장 시도 성공 여부
  */
 function forceSaveSettings() {
     const ctx = getContext();
-    if (!ctx) return;
+    if (!ctx) {
+        console.warn('[ST-LifeSim] forceSaveSettings: context not available');
+        return false;
+    }
     if (typeof ctx.saveSettings === 'function') {
         ctx.saveSettings();
-        return;
+        return true;
     }
     if (ctx.saveSettingsDebounced) {
         ctx.saveSettingsDebounced();
         if (typeof ctx.saveSettingsDebounced.flush === 'function') {
             ctx.saveSettingsDebounced.flush();
         }
+        return true;
     }
+    console.warn('[ST-LifeSim] forceSaveSettings: no save method available on context');
+    return false;
 }
 
 /**
@@ -2565,8 +2572,11 @@ function createPromptSaveBtn() {
     btn.textContent = '💾 저장';
     btn.style.marginLeft = '6px';
     btn.onclick = () => {
-        forceSaveSettings();
-        showToast('✅ 프롬프트가 저장되었습니다.', 'success', 1500);
+        if (forceSaveSettings()) {
+            showToast('✅ 프롬프트가 저장되었습니다.', 'success', 1500);
+        } else {
+            showToast('⚠️ 저장에 실패했습니다. 다시 시도해주세요.', 'error', 2000);
+        }
     };
     return btn;
 }
