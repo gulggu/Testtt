@@ -37,7 +37,6 @@ const SETTINGS_KEY = 'st-lifesim';
 const THEME_STORAGE_KEY = 'st-lifesim:forced-theme';
 const THEME_MODE_PRESETS_KEY = 'st-lifesim:theme-mode-presets';
 const IMAGE_INTENT_CONTEXT_WINDOW = 4;
-const DRAG_HOLD_DELAY_MS = 180;
 const ALWAYS_ON_MODULES = new Set(['quickTools', 'contacts']);
 const AI_ROUTE_DEFAULTS = {
     api: '',
@@ -1211,7 +1210,7 @@ function openSettingsPanel(onBack) {
         wrapper.appendChild(itemsTitle);
         const hint = Object.assign(document.createElement('div'), {
             className: 'slm-desc',
-            textContent: '항목을 드래그하여 순서를 변경하고, 표시명과 이미지를 커스텀할 수 있습니다.',
+            textContent: '화살표 버튼으로 순서를 변경하고, 표시명과 이미지를 커스텀할 수 있습니다.',
         });
         wrapper.appendChild(hint);
 
@@ -1225,81 +1224,48 @@ function openSettingsPanel(onBack) {
             QUICK_ACCESS_ITEMS
                 .filter(item => !ordered.some(v => v.key === item.key))
                 .forEach(item => ordered.push(item));
-            ordered.forEach((item) => {
+            ordered.forEach((item, idx) => {
                 const row = document.createElement('div');
                 row.className = 'slm-settings-row slm-qa-settings-item';
-                row.draggable = false;
                 row.dataset.qaKey = item.key;
-                let dragArmed = false;
-                let dragHoldTimer = null;
-
-                row.addEventListener('dragstart', (e) => {
-                    if (!dragArmed) {
-                        e.preventDefault();
-                        return;
-                    }
-                    row.classList.add('slm-qa-settings-item-dragging');
-                    e.dataTransfer?.setData('text/plain', item.key);
-                });
-                row.addEventListener('dragend', () => {
-                    row.classList.remove('slm-qa-settings-item-dragging');
-                    dragArmed = false;
-                    row.draggable = false;
-                });
-                row.addEventListener('dragover', (e) => e.preventDefault());
-                row.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    row.classList.remove('slm-qa-settings-item-dragging');
-                    dragArmed = false;
-                    row.draggable = false;
-                    const fromKey = e.dataTransfer?.getData('text/plain');
-                    const toKey = item.key;
-                    if (!fromKey || fromKey === toKey) return;
-                    if (!settings.quickAccess?.order) settings.quickAccess.order = [...DEFAULT_SETTINGS.quickAccess.order];
-                    const nextOrder = settings.quickAccess.order.filter(k => k !== fromKey);
-                    const targetIdx = nextOrder.indexOf(toKey);
-                    if (targetIdx === -1) nextOrder.push(fromKey);
-                    else nextOrder.splice(targetIdx, 0, fromKey);
-                    settings.quickAccess.order = nextOrder;
-                    saveSettings();
-                    renderItems();
-                });
 
                 // 체크박스 + 기본 이름
                 const headerRow = document.createElement('div');
                 headerRow.style.display = 'flex';
                 headerRow.style.alignItems = 'center';
                 headerRow.style.gap = '6px';
-                const dragHandle = Object.assign(document.createElement('button'), {
+
+                // ── 위/아래 화살표 버튼 ──
+                const swapOrder = (direction) => {
+                    if (!settings.quickAccess?.order) settings.quickAccess.order = [...DEFAULT_SETTINGS.quickAccess.order];
+                    const curOrder = settings.quickAccess.order;
+                    const curIdx = curOrder.indexOf(item.key);
+                    const targetIdx = curIdx + direction;
+                    if (curIdx < 0 || targetIdx < 0 || targetIdx >= curOrder.length) return;
+                    [curOrder[curIdx], curOrder[targetIdx]] = [curOrder[targetIdx], curOrder[curIdx]];
+                    saveSettings();
+                    refreshQuickAccessFab();
+                    renderItems();
+                };
+                const upBtn = Object.assign(document.createElement('button'), {
                     type: 'button',
-                    className: 'slm-qa-drag-handle',
-                    textContent: '☰',
-                    title: '길게 눌러 드래그하여 순서 변경 (Long press and drag to reorder)',
+                    className: 'slm-qa-arrow-btn',
+                    textContent: '▲',
+                    title: '위로 이동',
                 });
-                const armDrag = () => {
-                    dragArmed = true;
-                    row.draggable = true;
-                    row.classList.add('slm-qa-settings-item-drag-ready');
-                };
-                const clearArm = () => {
-                    if (dragHoldTimer) {
-                        clearTimeout(dragHoldTimer);
-                        dragHoldTimer = null;
-                    }
-                    if (!row.classList.contains('slm-qa-settings-item-dragging')) {
-                        dragArmed = false;
-                        row.draggable = false;
-                        row.classList.remove('slm-qa-settings-item-drag-ready');
-                    }
-                };
-                dragHandle.addEventListener('pointerdown', () => {
-                    clearArm();
-                    dragHoldTimer = setTimeout(armDrag, DRAG_HOLD_DELAY_MS);
+                upBtn.disabled = idx === 0;
+                upBtn.addEventListener('click', () => swapOrder(-1));
+                const downBtn = Object.assign(document.createElement('button'), {
+                    type: 'button',
+                    className: 'slm-qa-arrow-btn',
+                    textContent: '▼',
+                    title: '아래로 이동',
                 });
-                dragHandle.addEventListener('pointerup', clearArm);
-                dragHandle.addEventListener('pointercancel', clearArm);
-                dragHandle.addEventListener('pointerleave', clearArm);
-                headerRow.appendChild(dragHandle);
+                downBtn.disabled = idx === ordered.length - 1;
+                downBtn.addEventListener('click', () => swapOrder(1));
+                headerRow.appendChild(upBtn);
+                headerRow.appendChild(downBtn);
+
                 const lbl = document.createElement('label');
                 lbl.className = 'slm-toggle-label';
                 const chk = document.createElement('input');
@@ -1365,8 +1331,8 @@ function openSettingsPanel(onBack) {
                 imgRow.appendChild(imgInput);
                 row.appendChild(imgRow);
 
-                // RightSendForm에 아이콘 추가 옵션 (통화 요청 아이콘만 지원)
-                if (item.key === 'callRequest') {
+                // RightSendForm에 아이콘 추가 옵션
+                {
                 const rsfRow = document.createElement('div');
                 rsfRow.className = 'slm-input-row slm-qa-settings-field-row';
                 rsfRow.style.marginTop = '2px';
