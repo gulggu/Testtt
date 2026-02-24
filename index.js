@@ -2772,7 +2772,7 @@ async function applyCharacterImageDisplayMode() {
                 replacements.push({ index: matchIndex, length: fullTag.length, replacement: '' });
                 continue;
             }
-            // 통합 이미지 태그 생성 (커스텀 프롬프트 없이 캐릭터 컨텍스트 기반)
+            // 통합 이미지 태그 생성 (커스텀 프롬프트 반영)
             const includeNames = [charName];
             collectMentionedContactNames(`${recentContextText}\n${rawPrompt}`, allContactsList).forEach((name) => {
                 if (name && !includeNames.includes(name)) includeNames.push(name);
@@ -2782,7 +2782,18 @@ async function applyCharacterImageDisplayMode() {
             if (userName && userHintRegex.test(rawPrompt.toLowerCase())) {
                 includeNames.push(userName);
             }
-            const tagResult = await generateImageTags(rawPrompt, {
+            // 커스텀 메신저 이미지 프롬프트 적용
+            const customMsgImgPrompt = settings.messageImagePrompt || '';
+            const charAppearanceTags = String(getAppearanceTagsByName(charName) || '').trim();
+            const resolvedCustomPrompt = customMsgImgPrompt
+                ? customMsgImgPrompt
+                    .replace(/\{charName\}/g, charName)
+                    .replace(/\{appearanceTags\}/g, charAppearanceTags)
+                : '';
+            const enrichedPrompt = resolvedCustomPrompt
+                ? `${resolvedCustomPrompt}\nScene: ${rawPrompt}`
+                : rawPrompt;
+            const tagResult = await generateImageTags(enrichedPrompt, {
                 includeNames,
                 contacts: allContactsList,
                 getAppearanceTagsByName,
