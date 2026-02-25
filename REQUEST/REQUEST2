@@ -54,3 +54,9 @@ Write exactly one SNS post as {{authorName}}.
 * 답글 프롬프트, 추가댓글 프롬프트:
 기존 프롬프트에 해당 문장을 추가합니다 ->
 It should be written vividly, fitting the characteristics of each character.
+
+
+
+4. 모듈 비활성화 시 해당 기능 비활성화 및 해당 모듈의 프롬프트 주입 중지가 이루어지고 있는지 확인합니다.
+
+5. 최소한의 수정으로 모든 지침을 반영하세요.
