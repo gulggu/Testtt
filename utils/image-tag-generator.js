@@ -417,10 +417,11 @@ export async function generateImageTags(rawPrompt, options = {}) {
         const contactName = String(contact?.name || cleanName).trim();
         matchedNamesLower.add(normalized);
         if (contactName) matchedNamesLower.add(contactName.toLowerCase());
-        const appearance = getAppearanceFn(contactName || cleanName);
+        const appearance = String(getAppearanceFn(contactName || cleanName) || '').trim()
+            || String(getAppearanceFn(cleanName) || '').trim();
         matched.push({
             name: contactName || cleanName,
-            appearanceTags: String(appearance || '').trim(),
+            appearanceTags: appearance,
         });
     }
 
@@ -430,13 +431,15 @@ export async function generateImageTags(rawPrompt, options = {}) {
             .map(v => String(v || '').trim())
             .filter(Boolean);
         if (names.some(n => matchedNamesLower.has(n.toLowerCase()))) continue;
-        const mentioned = names.some(n => isNameMentioned(n));
-        if (mentioned) {
+        const matchedName = names.find(n => isNameMentioned(n));
+        if (matchedName) {
             const contactName = String(contact?.name || contact?.displayName || '').trim();
             matchedNamesLower.add(contactName.toLowerCase());
+            const appearance = String(getAppearanceFn(contactName) || '').trim()
+                || String(getAppearanceFn(matchedName) || '').trim();
             matched.push({
                 name: contactName,
-                appearanceTags: String(getAppearanceFn(contactName) || '').trim(),
+                appearanceTags: appearance,
             });
         }
     }
