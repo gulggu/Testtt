@@ -529,9 +529,9 @@ function sanitizeTags(raw) {
         cleaned = cleaned.substring(imgGenEndMatch.index + imgGenEndMatch[0].length);
     }
 
-    // Remove common AI preamble / markdown fences
+    // Remove common AI preamble / markdown fences (keep fenced content)
     cleaned = cleaned
-        .replace(/```[^`]*```/gs, '')
+        .replace(/```[a-zA-Z0-9_-]*\s*\n?/g, '')
         .replace(/\|/g, ',')               // 파이프를 쉼표로 변환
         .replace(/^[^a-zA-Z0-9_(\[]*/, '')
         .trim();
