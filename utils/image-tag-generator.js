@@ -383,12 +383,13 @@ export async function generateImageTags(rawPrompt, options = {}) {
         }
     }
 
-    const resolvedRawPrompt = resolveAppearanceTagRefs(rawPrompt, appearanceVarMap);
+    const sourceRawPrompt = String(rawPrompt || '');
+    const resolvedRawPrompt = resolveAppearanceTagRefs(sourceRawPrompt, appearanceVarMap);
+    const mentionSourceLower = `${sourceRawPrompt}\n${resolvedRawPrompt}`.toLowerCase();
 
     // ── Step 1: Match mentioned characters ──
     // Only include characters whose name, displayName, or subName is detected in the input.
     // includeNames are also checked for mention — they are NOT blindly force-included.
-    const textLower = resolvedRawPrompt.toLowerCase();
     const matched = [];
     const matchedNamesLower = new Set();
 
@@ -398,9 +399,9 @@ export async function generateImageTags(rawPrompt, options = {}) {
         const norm = name.toLowerCase();
         if (/^[a-z0-9_]+$/i.test(norm)) {
             const re = new RegExp(`(^|[^a-z0-9_])${norm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9_]|$)`, 'i');
-            return re.test(textLower);
+            return re.test(mentionSourceLower);
         }
-        return textLower.includes(norm);
+        return mentionSourceLower.includes(norm);
     }
 
     // includeNames are explicit caller hints (e.g. current speaker/author), so force-include first.
