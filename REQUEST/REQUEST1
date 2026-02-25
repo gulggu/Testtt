@@ -14,3 +14,7 @@
 
 
 ### 2. 이미지 생성 프롬프트 (커스텀) 관련하여
+
+* SNS 이미지 프롬프트(커스텀)의 기본값을 이 경로의 내용으로 변경한다. > REQUEST/REF/SNS img prompt (custom)
+
+* 메신저 이미지 프롬프트(커스텀)의 기본값을 이 경로의 내용으로 변경한다. > REQUEST/REF/Messenger img prompt (custom)
