@@ -281,6 +281,10 @@ export async function generateDanbooruTags(rawPrompt, options) {
             return '';
         }
 
+        if (additionalPrompt) {
+            const escapedAdditionalPrompt = additionalPrompt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            result = result.replace(new RegExp(`(?:\\n|\\r|\\s)*(?:Additional instructions:\\s*)?${escapedAdditionalPrompt}\\s*$`, 'i'), '').trim();
+        }
         return sanitizeTags(result);
     } catch (error) {
         console.error('[image-tag-generator] Tag generation failed:', error);
