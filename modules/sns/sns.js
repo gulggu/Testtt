@@ -138,11 +138,17 @@ function savePostingEnabledMap(map) {
 }
 
 function loadAuthorMinLikesMap() {
-    return loadData(AUTHOR_MIN_LIKES_KEY, {}, getDefaultBinding());
+    const current = loadData(AUTHOR_MIN_LIKES_KEY, null, SNS_PRESET_BINDING);
+    if (current && typeof current === 'object') return current;
+    const legacy = loadData(AUTHOR_MIN_LIKES_KEY, {}, getDefaultBinding());
+    if (legacy && typeof legacy === 'object' && Object.keys(legacy).length > 0 && getDefaultBinding() !== SNS_PRESET_BINDING) {
+        saveData(AUTHOR_MIN_LIKES_KEY, legacy, SNS_PRESET_BINDING);
+    }
+    return legacy && typeof legacy === 'object' ? legacy : {};
 }
 
 function saveAuthorMinLikesMap(map) {
-    saveData(AUTHOR_MIN_LIKES_KEY, map, getDefaultBinding());
+    saveData(AUTHOR_MIN_LIKES_KEY, map, SNS_PRESET_BINDING);
 }
 
 function getInitialLikes(authorName, fallback = 0) {
@@ -1746,6 +1752,7 @@ function openImagePresetManager(onChanged) {
 function openAvatarSettingsDialog(onUpdate) {
     const wrapper = document.createElement('div');
     wrapper.className = 'slm-form';
+    const defaultAuthorLanguage = getSnsPromptSettings().language;
 
     // ─ 연락처 프로필 연동 토글 ─
     const linkRow = document.createElement('div');
@@ -1814,17 +1821,22 @@ function openAvatarSettingsDialog(onUpdate) {
         // 새 프로필에 없는 이전 항목 제거
         const freshNames = new Set(freshProfiles.map(c => c.name));
         Object.keys(userIds).forEach(k => { if (!freshNames.has(k)) delete userIds[k]; });
+        Object.keys(avatars).forEach(k => { if (!freshNames.has(k)) delete avatars[k]; });
+        Object.keys(defaultImages).forEach(k => { if (!freshNames.has(k)) delete defaultImages[k]; });
         Object.keys(postingEnabled).forEach(k => { if (!freshNames.has(k)) delete postingEnabled[k]; });
+        Object.keys(authorLanguages).forEach(k => { if (!freshNames.has(k)) delete authorLanguages[k]; });
+        Object.keys(authorMinLikes).forEach(k => { if (!freshNames.has(k)) delete authorMinLikes[k]; });
         // 새 프로필 동기화
         freshProfiles.forEach(c => {
             if (!userIds[c.name]) userIds[c.name] = makeDefaultHandle(c.name);
             if (c.avatar && !avatars[c.name]) avatars[c.name] = c.avatar;
             if (c.name !== freshUserName && postingEnabled[c.name] == null) postingEnabled[c.name] = true;
-            if (!['ko', 'en', 'ja', 'zh'].includes(authorLanguages[c.name])) authorLanguages[c.name] = 'en';
+            if (!['ko', 'en', 'ja', 'zh'].includes(authorLanguages[c.name])) authorLanguages[c.name] = defaultAuthorLanguage;
             if (authorMinLikes[c.name] == null || Number.isNaN(Number(authorMinLikes[c.name]))) authorMinLikes[c.name] = 0;
         });
         saveUserIds(userIds);
         saveAvatars(avatars);
+        saveAuthorDefaultImages(defaultImages);
         savePostingEnabledMap(postingEnabled);
         saveAuthorLanguages(authorLanguages);
         saveAuthorMinLikesMap(authorMinLikes);
@@ -1856,7 +1868,7 @@ function openAvatarSettingsDialog(onUpdate) {
         if (!userIds[c.name]) userIds[c.name] = makeDefaultHandle(c.name);
         if (c.avatar && !avatars[c.name]) avatars[c.name] = c.avatar;
         if (c.name !== userName && postingEnabled[c.name] == null) postingEnabled[c.name] = true;
-        if (!['ko', 'en', 'ja', 'zh'].includes(authorLanguages[c.name])) authorLanguages[c.name] = 'en';
+        if (!['ko', 'en', 'ja', 'zh'].includes(authorLanguages[c.name])) authorLanguages[c.name] = defaultAuthorLanguage;
         if (authorMinLikes[c.name] == null || Number.isNaN(Number(authorMinLikes[c.name]))) authorMinLikes[c.name] = 0;
     });
     saveUserIds(userIds);
@@ -1957,7 +1969,7 @@ function openAvatarSettingsDialog(onUpdate) {
             ].forEach(({ value, label }) => {
                 languageSelect.appendChild(Object.assign(document.createElement('option'), { value, textContent: label }));
             });
-            languageSelect.value = authorLanguages[c.name] || 'ko';
+            languageSelect.value = authorLanguages[c.name] || defaultAuthorLanguage;
             languageSelect.onchange = () => {
                 authorLanguages[c.name] = languageSelect.value;
                 saveAuthorLanguages(authorLanguages);
