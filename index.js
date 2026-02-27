@@ -2895,10 +2895,10 @@ function normalizeQuotesForPicTag(text) {
         .replace(/[\u2018\u2019\u201A\u201B\uFF07]/g, "'")
         // HTML-entity-encoded pic tags → decoded for regex matching
         // e.g. &lt;pic prompt=&quot;...&quot;&gt; → <pic prompt="...">
-        .replace(/&lt;(\s*pic\s+[^\n]*?prompt\s*=\s*)&quot;([^&]*?)&quot;(\s*\/?\s*)&gt;/gi, '<$1"$2"$3>')
-        .replace(/&lt;(\s*pic\s+[^\n]*?prompt\s*=\s*)&quot;([^&]*?)&quot;/gi, '<$1"$2"')
+        .replace(/&lt;(\s*pic\s+[^\n]*?prompt\s*=\s*)&quot;([^\n]*?)&quot;(\s*\/?\s*)&gt;/gi, '<$1"$2"$3>')
+        .replace(/&lt;(\s*pic\s+[^\n]*?prompt\s*=\s*)&quot;([^\n]*?)&quot;/gi, '<$1"$2"')
         // Strip inline backtick wrapping around pic tags (e.g., `<pic prompt="...">`)
-        .replace(/`(<?\s*pic\s+[^`]*?prompt\s*=\s*(?:"[^"]*"|'[^']*')(?:\s*\/?\s*>)?)`/gi, '$1');
+        .replace(/`(<?\s*pic\s+[^`\n]*?prompt\s*=\s*(?:"[^"]*"|'[^']*')(?:\s*\/?\s*>)?)`/gi, '$1');
 }
 
 /**
