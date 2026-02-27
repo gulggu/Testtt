@@ -3092,7 +3092,7 @@ async function applyCharacterImageDisplayMode() {
         const mes = normalizeQuotesForPicTag(String(lastMsg.mes || ''));
 
         // <pic prompt="..."> 태그가 있는지 확인 (smart/curly quotes는 정규화 후 매칭)
-        PIC_TAG_REGEX.lastIndex = 0; // 방어적 리셋
+        PIC_TAG_REGEX.lastIndex = 0; // /g 플래그 정규식의 방어적 리셋 (matchAll은 내부 복제하지만 안전을 위해)
         const picMatches = [...mes.matchAll(PIC_TAG_REGEX)];
         if (picMatches.length === 0) return;
 
