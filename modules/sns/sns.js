@@ -514,6 +514,7 @@ export async function triggerNpcPosting() {
     const contacts = [...getContacts('chat'), ...getContacts('character'), ...getContacts(getDefaultBinding())]
         .filter((c) => {
             if (!c?.name || seenContactNames.has(c.name)) return false;
+            if (c?.binding === 'character') return false;
             seenContactNames.add(c.name);
             return true;
         });
