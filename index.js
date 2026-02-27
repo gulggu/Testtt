@@ -2743,8 +2743,20 @@ function syncQuickSendButtons() {
 // 메신저 이미지 프롬프트 주입 태그
 const MSG_IMAGE_INJECT_TAG = 'st-lifesim-msg-image';
 
-// <pic prompt="..."> 패턴 감지 정규식
-const PIC_TAG_REGEX = /<pic\s[^>]*?prompt="([^"]*)"[^>]*?\/?>/gi;
+// <pic prompt="..."> 패턴 감지 정규식 (double quotes, single quotes, 및 smart/curly quotes 지원)
+const PIC_TAG_REGEX = /<pic\s[^>]*?prompt\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>/gi;
+
+/**
+ * AI 모델이 종종 출력하는 유니코드 스마트/커리 인용부호를 ASCII 인용부호로 정규화한다.
+ * 이를 통해 <pic prompt="..."> 정규식이 올바르게 매칭될 수 있도록 한다.
+ * @param {string} text
+ * @returns {string}
+ */
+function normalizeQuotesForPicTag(text) {
+    return text
+        .replace(/[\u201C\u201D\u201E\u201F]/g, '"')   // U+201C " U+201D " U+201E „ U+201F ‟
+        .replace(/[\u2018\u2019\u201A\u201B]/g, "'");   // U+2018 ' U+2019 ' U+201A ‚ U+201B ‛
+}
 
 /**
  * 메신저 이미지 모드에 따라 AI 프롬프트 주입을 업데이트한다
@@ -2833,9 +2845,9 @@ async function applyCharacterImageDisplayMode() {
     if (!ctx) return;
     const lastMsg = ctx.chat?.[ctx.chat.length - 1];
     if (!lastMsg || lastMsg.is_user) return;
-    const mes = String(lastMsg.mes || '');
+    const mes = normalizeQuotesForPicTag(String(lastMsg.mes || ''));
 
-    // <pic prompt="..."> 태그가 있는지 확인
+    // <pic prompt="..."> 태그가 있는지 확인 (smart/curly quotes는 정규화 후 매칭)
     const picMatches = [...mes.matchAll(PIC_TAG_REGEX)];
     if (picMatches.length === 0) return;
 
@@ -2860,7 +2872,7 @@ async function applyCharacterImageDisplayMode() {
             .join('\n');
         for (const match of picMatches) {
             const fullTag = match[0];
-            const rawPrompt = (match[1] || '').trim();
+            const rawPrompt = (match[1] || match[2] || '').trim();
             const matchIndex = match.index;
             if (!rawPrompt) {
                 replacements.push({ index: matchIndex, length: fullTag.length, replacement: '' });
@@ -2924,7 +2936,7 @@ async function applyCharacterImageDisplayMode() {
         const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
         for (const match of picMatches) {
             const fullTag = match[0];
-            const prompt = (match[1] || '').trim();
+            const prompt = (match[1] || match[2] || '').trim();
             const matchIndex = match.index;
             if (!prompt) {
                 replacements.push({ index: matchIndex, length: fullTag.length, replacement: '' });
