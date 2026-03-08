@@ -129,6 +129,7 @@ export function closePopup(id) {
         return;
     }
 
+    // 등록 정보가 사라졌지만 DOM만 남아 있는 예외 상황을 위한 안전 정리
     const existing = document.getElementById(`slm-overlay-${id}`);
     if (existing) existing.remove();
 }
