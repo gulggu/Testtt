@@ -2958,7 +2958,7 @@ function isUrlAlreadyInChat(url, ctx) {
 }
 
 /**
- * 메신저 자동 이미지 생성은 외부 API를 통해서만 처리한다.
+ * 메신저 자동 이미지 생성을 외부 API를 통해 호출한다.
  * @param {string} imagePrompt - 이미지 생성에 사용할 프롬프트
  * @returns {Promise<string>} 생성된 이미지의 URL 또는 빈 문자열
  */
@@ -2974,7 +2974,7 @@ async function generateMessageImageViaApi(imagePrompt) {
         const externalApiUrl = String(settings?.snsExternalApiUrl || '').trim();
         const externalApiTimeoutMs = Math.max(1000, Math.min(60000, Number(settings?.snsExternalApiTimeoutMs) || 12000));
         if (!externalApiUrl || typeof fetch !== 'function') {
-            console.warn('[ST-LifeSim] 메신저 자동 이미지 생성은 외부 API URL 설정이 필요합니다.');
+            console.warn('[ST-LifeSim] 메신저 자동 이미지 생성은 외부 API URL과 fetch 지원이 필요합니다.');
             return '';
         }
         const controller = new AbortController();

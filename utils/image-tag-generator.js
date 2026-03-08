@@ -710,7 +710,18 @@ function safeAppearanceGroup(group) {
     return safeTags(trimmed);
 }
 
-const APPEARANCE_TAG_PATTERN = /\b(hair|hairstyle|bangs|eyes|eyelashes|eyebrows|eyeshadow|pupils?|skin|freckles|mole|beard|mustache|glasses|eyewear|earrings?|necklace|choker|shirt|t-?shirt|blouse|sweater|hoodie|jacket|coat|cardigan|dress|skirt|shorts|pants|jeans|leggings|stockings|socks|shoes|boots|heels|sandals|hat|cap|ribbon|bow|tie|scarf|gloves|swimsuit|bikini|uniform|kimono|apron|bra|panties|cleavage|breasts?|chest|thighs?|waist|navel|body|figure|build|muscular|slim|petite|tall|short|young|mature|face|lips|nose|ears?)\b/i;
+const APPEARANCE_TAG_KEYWORDS = [
+    'hair', 'hairstyle', 'bangs', 'eyes', 'eyelashes', 'eyebrows', 'eyeshadow', 'pupil', 'pupils',
+    'skin', 'freckles', 'mole', 'beard', 'mustache', 'glasses', 'eyewear', 'earring', 'earrings',
+    'necklace', 'choker', 'shirt', 't-shirt', 'tshirt', 'blouse', 'sweater', 'hoodie', 'jacket', 'coat',
+    'cardigan', 'dress', 'skirt', 'shorts', 'pants', 'jeans', 'leggings', 'stockings', 'socks',
+    'shoes', 'boots', 'heels', 'sandals', 'hat', 'cap', 'ribbon', 'bow', 'tie', 'scarf', 'gloves',
+    'swimsuit', 'bikini', 'uniform', 'kimono', 'apron', 'bra', 'panties', 'cleavage', 'breast', 'breasts',
+    'chest', 'thigh', 'thighs', 'waist', 'navel', 'body', 'figure', 'build', 'muscular', 'slim', 'petite',
+    'tall', 'short', 'young', 'mature', 'face', 'lips', 'nose', 'ear', 'ears',
+];
+const APPEARANCE_TAG_PATTERN = new RegExp(`\\b(${APPEARANCE_TAG_KEYWORDS.join('|')})\\b`, 'i');
+const MAX_DANBOORU_TAG_LENGTH = 80;
 
 function normalizeTagText(text) {
     return String(text || '')
@@ -769,7 +780,7 @@ export function looksLikeDanbooruPrompt(text) {
     if (containsKorean(withoutBlocks)) return false;
     const parts = splitTags(withoutBlocks);
     if (parts.length < 2 && !/\[[^\]]+:[^\]]+\]/.test(trimmed)) return false;
-    return parts.every(tag => tag.length <= 80 && !/[.!?'"`]/.test(tag));
+    return parts.every(tag => tag.length <= MAX_DANBOORU_TAG_LENGTH && !/[.!?'"`]/.test(tag));
 }
 
 

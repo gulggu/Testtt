@@ -30,6 +30,7 @@ const SNS_EXTRA_COMMENT_PROBABILITY = 0.35;
 const SNS_POST_TEXT_MAX = 280;
 const SNS_IMAGE_DESC_MAX = 220;
 const SNS_RANDOM_LIKES_BONUS_MAX = 30;
+const DANBOORU_SPACE_TAG_RULE = 'Use English Danbooru-style tags only, separated by commas, with spaces instead of underscores.';
 const DEFAULT_SNS_PROMPTS = {
     postChar: 'Write exactly one SNS post as {{charName}}.\n\n* Before writing, internalize these:\n- {{charName}}\'s personality, speech patterns, and worldview based on profile.\n- Extract the setting and genre from {{charName}}\'s profile itself — it could be modern, medieval fantasy, zombie apocalypse, sci-fi, or anything else. Let that world shape what feels natural to say and how to say it\n- What {{charName}} would actually care about or casually mention on a given day\n--------\n* {{charName}}\'s profile:\n{{personality}}\n--------\n* System Rules:\n- 1–4 sentences, casual and off-the-cuff, like a real personal post\n- Write in the voice and language style that fits {{charName}}\'s background and personality\n- If {{charName}}\'s personality strongly suggests they\'d use emojis, you may include them — otherwise, don\'t\n- No hashtags, no image tags, no quotation marks, no other characters\' reactions, no [caption: ...] blocks\n- Word choice, references, and tone must stay true to the detected world — never bleed in elements from the wrong setting\n- Don\'t be stiff or formal. This is a glimpse into {{charName}}\'s actual inner life, not a public announcement\n\n* System Note\n- Output only {{charName}}\'s post text. Nothing else.\n- Please comply with the output language.\n* This is a post aimed at an unspecified number of people. It is not a 1:1 session to communicate with {{user}}.',
     postContact: 'Write exactly one SNS post as {{authorName}}.\n\n* Before writing, internalize these:\n- {{authorName}}\'s personality, speech patterns, and worldview based on profile.\n- Extract the setting and genre from {{authorName}}\'s profile itself — it could be modern, medieval fantasy, zombie apocalypse, sci-fi, or anything else. Let that world shape what feels natural to say and how to say it\n- What {{authorName}} would actually care about or casually mention on a given day\n-------\n* {{authorName}}\'s profile:\n{{personality}}\n-------\n* System Rules:\n- 1–2 sentences, casual and off-the-cuff, like a real personal post\n- Write in the voice and language style that fits {{authorName}}\'s background and personality\n- If {{authorName}}\'s personality strongly suggests they\'d use emojis, you may include them — otherwise, don\'t\n- No hashtags, no image tags, no quotation marks, no other characters\' reactions, no [caption: ...] blocks\n- Word choice, references, and tone must stay true to the detected world — never bleed in elements from the wrong setting\n- Don\'t be stiff or formal. This is a glimpse into {{authorName}}\'s actual inner life, not a public announcement\n\n* System Note\n- Output only {{authorName}}\'s post text. Nothing else.\n- Please comply with the output language.',
@@ -221,7 +222,7 @@ function buildSnsDirectImagePromptRequest(sourcePrompt, authorName) {
         '[Output rule]',
         `Return exactly one final direct image prompt for ${authorName || 'the author'}.`,
         'Output ONLY one line of English Danbooru-style tags for direct image generation.',
-        'Use comma-separated Danbooru tags only. Replace underscores with spaces.',
+        DANBOORU_SPACE_TAG_RULE,
         'Do not output explanations, markdown, XML tags, captions, or Korean.',
         'Keep the main tag list focused on action, setting, framing, composition, lighting, and camera tags.',
         'Do not put core appearance details in the main tag list when [Name: appearance tags] blocks are available.',
@@ -237,7 +238,7 @@ async function createSnsImagePrompt(ctx, sourcePrompt, authorName, contacts = []
     const additionalPrompt = [
         String(getExtensionSettings()?.['st-lifesim']?.tagGenerationAdditionalPrompt || '').trim(),
         'This prompt is for an SNS photo post.',
-        'Use English Danbooru-style tags only, separated by commas, with spaces instead of underscores.',
+        DANBOORU_SPACE_TAG_RULE,
         'Keep scene tags focused on SNS framing, composition, background, action, mood, and lighting.',
         'Do not invent or repeat core appearance tags outside the [Name: appearance tags] blocks.',
         authorName ? `Keep ${authorName} visible in the frame unless the post is clearly focused on an object, food, pet, or scenery only.` : '',
@@ -255,6 +256,8 @@ async function createSnsImagePrompt(ctx, sourcePrompt, authorName, contacts = []
     );
     if (looksLikeDanbooruPrompt(generatedPrompt)) {
         const directPrompt = buildDirectImagePrompt(generatedPrompt, promptOptions);
+        // 일부 외부 응답은 태그처럼 보이지만 후처리 시 비어질 수 있으므로,
+        // 그 경우에는 기본 태그 생성 파이프라인으로 다시 정규화한다.
         if (directPrompt.finalPrompt) return directPrompt;
     }
     return generateImageTags(generatedPrompt || sourcePrompt, {
