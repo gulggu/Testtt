@@ -54,6 +54,8 @@ const GROUP_CHAT_SETTINGS_DEFAULTS = {
     includeMainCharacter: true,
     contactOnlyProbability: 35,
 };
+const GROUP_CHAT_USER_DESCRIPTION = '인간 플레이어가 대화를 제어합니다. 이 사람의 메시지를 대신 작성하지 마세요.';
+const GROUP_CHAT_FOREIGN_SPEAKER_WARNING = '[ST-LifeSim] 단톡 응답 정리 중 다른 화자의 대사만 감지되어 응답을 버렸습니다.';
 const ROUTE_MODEL_KEY_BY_SOURCE = {
     openai: 'openai_model',
     claude: 'claude_model',
@@ -1049,7 +1051,7 @@ function buildGroupChatRosterEntries(settings) {
             relationToUser: '본인 (인간 플레이어)',
             relationToChar: '',
             personality: '',
-            description: 'Human player controlling the conversation. Never write this person\'s messages for them.',
+            description: GROUP_CHAT_USER_DESCRIPTION,
             avatar: '',
         });
     }
@@ -1102,11 +1104,22 @@ function normalizeGroupChatText(text) {
         .trim();
 }
 
+function escapeRegex(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Cleans up a group-chat response and keeps only the responder's message when other speakers leak in.
+ * @param {string} text
+ * @param {string} responderName
+ * @param {Array<{ name?: string, displayName?: string }>} [roster]
+ * @returns {string}
+ */
 function sanitizeGroupChatReply(text, responderName, roster = []) {
     // 응답 텍스트를 정리하고, 모델이 붙인 화자명/불필요한 접두어를 함께 제거한다.
     let cleaned = normalizeGroupChatText(text);
     if (!cleaned) return '';
-    const escapedName = String(responderName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedName = escapeRegex(responderName);
     const prefixPatterns = [
         new RegExp(`^${escapedName}\\s*[:：-]\\s*`, 'i'),
         /^\s*(?:reply|response)\s*[:：-]\s*/i,
@@ -1129,15 +1142,21 @@ function sanitizeGroupChatReply(text, responderName, roster = []) {
         .filter((name) => name.toLowerCase() !== String(responderName || '').trim().toLowerCase())
         .sort((a, b) => b.length - a.length)
         .forEach((name) => {
-            const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const escaped = escapeRegex(name);
             const match = cleaned.match(new RegExp(`(^|\\n)\\s*${escaped}\\s*[:：-]\\s*`, 'i'));
             if (!match) return;
-            const index = match.index ?? -1;
-            if (earliestForeignSpeakerIndex === -1 || (index !== -1 && index < earliestForeignSpeakerIndex)) {
+            const index = match.index !== undefined ? match.index : -1;
+            if (earliestForeignSpeakerIndex === -1 || index < earliestForeignSpeakerIndex) {
                 earliestForeignSpeakerIndex = index;
             }
         });
-    if (earliestForeignSpeakerIndex === 0) return '';
+    if (earliestForeignSpeakerIndex === 0) {
+        console.warn(GROUP_CHAT_FOREIGN_SPEAKER_WARNING, {
+            responderName,
+            raw: text,
+        });
+        return '';
+    }
     if (earliestForeignSpeakerIndex > 0) {
         cleaned = cleaned.slice(0, earliestForeignSpeakerIndex).trim();
     }
@@ -1176,7 +1195,7 @@ async function generateGroupChatReply(responder, roster) {
         'This is a mobile messenger group chat involving {{user}} and the listed participants.',
         'Rules:',
         `- Reply only as ${responder.displayName}. Never narrate or describe actions outside the message.`,
-        '- {{user}} is the human player. Never write {{user}}\'s dialogue, reactions, choices, or actions.',
+        "- {{user}} is the human player. Never write {{user}}'s dialogue, reactions, choices, or actions.",
         '- Stay inside this same group-chat room context. Do not turn it into a private 1:1 conversation.',
         '- Keep it to 1-3 natural chat sentences.',
         '- Continue the ongoing conversation naturally, acknowledging the latest flow of the chat.',
@@ -1294,7 +1313,7 @@ async function executePlannedGroupChatTurn(plan) {
         const responderNames = [responder?.displayName, responder?.name]
             .map((name) => String(name || '').trim().toLowerCase())
             .filter(Boolean);
-        if (responderNames.includes(userName)) continue;
+        if (userName && responderNames.includes(userName)) continue;
         const reply = await generateGroupChatReply(responder, plan.roster);
         if (!reply) continue;
         await slashSendAs(responder.displayName || responder.name, reply);

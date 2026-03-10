@@ -71,6 +71,12 @@ const MODEL_KEY_BY_SOURCE = {
  * @param {'chat'|'character'} binding
  * @returns {Contact[]}
  */
+/**
+ * Generates a stable fallback id for legacy contact data that lacks an id field.
+ * @param {Partial<Contact>} contact
+ * @param {'chat'|'character'} binding
+ * @returns {string}
+ */
 function buildLegacyContactId(contact, binding) {
     const seed = [
         binding,
@@ -79,10 +85,39 @@ function buildLegacyContactId(contact, binding) {
     return `legacy:${seed}`;
 }
 
-function isGroupChatContact(contact) {
-    return contact?.groupChatParticipant === true && !contact?.isUserAuto && !contact?.isCharAuto;
+/**
+ * Determines whether a contact can participate in group-chat auto replies.
+ * Excludes auto-generated {{user}}/{{char}} contacts.
+ * @param {boolean} groupChatParticipant
+ * @param {boolean} isUserAuto
+ * @param {boolean} isCharAuto
+ * @returns {boolean}
+ */
+function hasGroupChatEligibility(groupChatParticipant, isUserAuto, isCharAuto) {
+    return groupChatParticipant === true && !isUserAuto && !isCharAuto;
 }
 
+/**
+ * Determines whether a contact can participate in group-chat auto replies.
+ * Excludes auto-generated {{user}}/{{char}} contacts.
+ * @param {Partial<Contact>} contact
+ * @returns {boolean}
+ */
+function isGroupChatContact(contact) {
+    return hasGroupChatEligibility(
+        contact?.groupChatParticipant === true,
+        contact?.isUserAuto === true,
+        contact?.isCharAuto === true,
+    );
+}
+
+/**
+ * Normalizes contact data into a consistent structure for the current binding.
+ * Returns null for invalid input.
+ * @param {Partial<Contact>} contact
+ * @param {'chat'|'character'} binding
+ * @returns {Contact|null}
+ */
 function normalizeContact(contact, binding = 'chat') {
     if (!contact || typeof contact !== 'object') return null;
     const normalizedBinding = binding === 'character' ? 'character' : 'chat';
@@ -105,7 +140,7 @@ function normalizeContact(contact, binding = 'chat') {
         binding: normalizedBinding,
         isCharAuto,
         isUserAuto,
-        groupChatParticipant: isGroupChatContact({ ...contact, isCharAuto, isUserAuto }),
+        groupChatParticipant: hasGroupChatEligibility(contact.groupChatParticipant === true, isUserAuto, isCharAuto),
     };
 }
 
