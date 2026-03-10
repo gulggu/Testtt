@@ -29,6 +29,7 @@ import { initSns, openSnsPopup, triggerNpcPosting, triggerPendingCommentReaction
 import { initCalendar, openCalendarPopup } from './modules/calendar/calendar.js';
 import { initGifticon, openGifticonPopup, trackGifticonUsageFromCharacterMessage } from './modules/gifticon/gifticon.js';
 import { buildDirectImagePrompt } from './utils/image-tag-generator.js';
+import { slashSendAs } from './utils/slash.js';
 
 // 설정 키
 const SETTINGS_KEY = 'st-lifesim';
@@ -43,6 +44,15 @@ const AI_ROUTE_DEFAULTS = {
     chatSource: '',
     modelSettingKey: '',
     model: '',
+};
+const GROUP_CHAT_TRANSCRIPT_LIMIT = 12;
+const GROUP_CHAT_SETTINGS_DEFAULTS = {
+    enabled: false,
+    responseProbability: 35,
+    extraResponseProbability: 25,
+    maxResponsesPerTurn: 2,
+    includeMainCharacter: true,
+    contactOnlyProbability: 35,
 };
 const ROUTE_MODEL_KEY_BY_SOURCE = {
     openai: 'openai_model',
@@ -147,6 +157,7 @@ const DEFAULT_SETTINGS = {
         intervalSec: 10,
         probability: 8,
     },
+    groupChat: { ...GROUP_CHAT_SETTINGS_DEFAULTS },
     snsPostingProbability: 10, // % (0~100)
     proactiveCallProbability: 0, // % (0~100)
     snsExternalApiUrl: '',
@@ -288,6 +299,27 @@ function getSettings() {
     }
     if (ext[SETTINGS_KEY].firstMsg == null) {
         ext[SETTINGS_KEY].firstMsg = { ...DEFAULT_SETTINGS.firstMsg };
+    }
+    if (!ext[SETTINGS_KEY].groupChat || typeof ext[SETTINGS_KEY].groupChat !== 'object') {
+        ext[SETTINGS_KEY].groupChat = { ...GROUP_CHAT_SETTINGS_DEFAULTS };
+    }
+    if (typeof ext[SETTINGS_KEY].groupChat.enabled !== 'boolean') {
+        ext[SETTINGS_KEY].groupChat.enabled = GROUP_CHAT_SETTINGS_DEFAULTS.enabled;
+    }
+    if (!Number.isFinite(ext[SETTINGS_KEY].groupChat.responseProbability)) {
+        ext[SETTINGS_KEY].groupChat.responseProbability = GROUP_CHAT_SETTINGS_DEFAULTS.responseProbability;
+    }
+    if (!Number.isFinite(ext[SETTINGS_KEY].groupChat.extraResponseProbability)) {
+        ext[SETTINGS_KEY].groupChat.extraResponseProbability = GROUP_CHAT_SETTINGS_DEFAULTS.extraResponseProbability;
+    }
+    if (!Number.isFinite(ext[SETTINGS_KEY].groupChat.maxResponsesPerTurn)) {
+        ext[SETTINGS_KEY].groupChat.maxResponsesPerTurn = GROUP_CHAT_SETTINGS_DEFAULTS.maxResponsesPerTurn;
+    }
+    if (typeof ext[SETTINGS_KEY].groupChat.includeMainCharacter !== 'boolean') {
+        ext[SETTINGS_KEY].groupChat.includeMainCharacter = GROUP_CHAT_SETTINGS_DEFAULTS.includeMainCharacter;
+    }
+    if (!Number.isFinite(ext[SETTINGS_KEY].groupChat.contactOnlyProbability)) {
+        ext[SETTINGS_KEY].groupChat.contactOnlyProbability = GROUP_CHAT_SETTINGS_DEFAULTS.contactOnlyProbability;
     }
     if (ext[SETTINGS_KEY].modules?.gifticon == null) {
         if (!ext[SETTINGS_KEY].modules) ext[SETTINGS_KEY].modules = {};
@@ -977,6 +1009,252 @@ function openQuickToolsPanel(onBack) {
 /**
  * 설정 패널을 연다 (탭 분리: 일반 / 모듈 / 이모티콘·SNS / 테마)
  */
+function clampPercentage(value, fallback) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(0, Math.min(100, parsed));
+}
+
+function getGroupChatRuntimeSettings() {
+    const raw = getSettings().groupChat || {};
+    return {
+        enabled: raw.enabled === true,
+        responseProbability: clampPercentage(raw.responseProbability, GROUP_CHAT_SETTINGS_DEFAULTS.responseProbability),
+        extraResponseProbability: clampPercentage(raw.extraResponseProbability, GROUP_CHAT_SETTINGS_DEFAULTS.extraResponseProbability),
+        maxResponsesPerTurn: Math.max(1, Math.min(3, Number.parseInt(raw.maxResponsesPerTurn, 10) || GROUP_CHAT_SETTINGS_DEFAULTS.maxResponsesPerTurn)),
+        includeMainCharacter: raw.includeMainCharacter !== false,
+        contactOnlyProbability: clampPercentage(raw.contactOnlyProbability, GROUP_CHAT_SETTINGS_DEFAULTS.contactOnlyProbability),
+    };
+}
+
+function buildGroupChatContactPool() {
+    const allContacts = [...getContacts('character'), ...getContacts('chat')];
+    const seen = new Set();
+    return allContacts.filter((contact) => {
+        const key = String(contact?.id || contact?.name || '').trim().toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return contact?.groupChatParticipant === true && !contact?.isUserAuto && !contact?.isCharAuto;
+    });
+}
+
+function buildGroupChatRosterEntries(settings) {
+    const ctx = getContext();
+    const roster = [];
+    if (settings.includeMainCharacter && ctx?.name2) {
+        roster.push({
+            type: 'char',
+            name: ctx.name2,
+            displayName: ctx.name2,
+            relationToUser: '현재 대화 상대',
+            relationToChar: '',
+            personality: String(ctx.characters?.[ctx.characterId]?.personality || '').trim(),
+            description: String(ctx.characters?.[ctx.characterId]?.description || '').trim(),
+            avatar: ctx.characters?.[ctx.characterId]?.avatar
+                ? `/characters/${ctx.characters[ctx.characterId].avatar}`
+                : '',
+        });
+    }
+    buildGroupChatContactPool().forEach((contact) => {
+        roster.push({
+            type: 'contact',
+            name: contact.name,
+            displayName: contact.displayName || contact.name,
+            relationToUser: contact.relationToUser,
+            relationToChar: contact.relationToChar,
+            personality: contact.personality,
+            description: contact.description,
+            avatar: contact.avatar,
+        });
+    });
+    return roster;
+}
+
+function buildGroupChatContactRoster() {
+    return buildGroupChatContactPool().map((contact) => ({
+        type: 'contact',
+        name: contact.name,
+        displayName: contact.displayName || contact.name,
+        relationToUser: contact.relationToUser,
+        relationToChar: contact.relationToChar,
+        personality: contact.personality,
+        description: contact.description,
+        avatar: contact.avatar,
+    }));
+}
+
+function normalizeGroupChatText(text) {
+    return String(text || '')
+        .replace(/\r/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function sanitizeGroupChatReply(text, responderName) {
+    // 응답 텍스트를 정리하고, 모델이 붙인 화자명/불필요한 접두어를 함께 제거한다.
+    let cleaned = normalizeGroupChatText(text);
+    if (!cleaned) return '';
+    const escapedName = String(responderName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefixPatterns = [
+        new RegExp(`^${escapedName}\\s*[:：-]\\s*`, 'i'),
+        /^\s*(?:reply|response)\s*[:：-]\s*/i,
+    ];
+    prefixPatterns.forEach((pattern) => {
+        cleaned = cleaned.replace(pattern, '');
+    });
+    cleaned = cleaned.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim();
+    return cleaned;
+}
+
+function buildGroupChatTranscript(limit = GROUP_CHAT_TRANSCRIPT_LIMIT) {
+    const ctx = getContext();
+    const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
+    // 최근 12개 발화면 1:1/단톡 맥락과 말투를 이어가기에 충분하면서도 프롬프트 길이를 과하게 늘리지 않는다.
+    return chat.slice(-limit).map((msg) => {
+        const speaker = msg?.is_user
+            ? (ctx?.name1 || '{{user}}')
+            : (msg?.name || ctx?.name2 || '{{char}}');
+        const text = normalizeGroupChatText(msg?.mes || '').replace(/\n/g, ' ');
+        return `${speaker}: ${text}`;
+    }).join('\n');
+}
+
+async function generateGroupChatReply(responder, roster) {
+    const ctx = getContext();
+    if (!ctx) return '';
+    const transcript = buildGroupChatTranscript();
+    const latestUserMessage = normalizeGroupChatText(ctx?.chat?.[ctx.chat.length - 1]?.mes || '');
+    const rosterText = roster.map((entry) => {
+        const details = [];
+        if (entry.relationToUser) details.push(`Relation to {{user}}: ${entry.relationToUser}`);
+        if (entry.relationToChar) details.push(`Relation to {{char}}: ${entry.relationToChar}`);
+        if (entry.description) details.push(`Description: ${entry.description}`);
+        if (entry.personality) details.push(`Speech/personality: ${entry.personality}`);
+        return `- ${entry.displayName}${details.length ? ` | ${details.join(' | ')}` : ''}`;
+    }).join('\n');
+    const prompt = [
+        `You are writing exactly one messenger group-chat reply as ${responder.displayName}.`,
+        'This is a mobile messenger group chat involving {{user}} and the listed participants.',
+        'Rules:',
+        `- Reply only as ${responder.displayName}. Never narrate or describe actions outside the message.`,
+        '- Keep it to 1-3 natural chat sentences.',
+        '- Continue the ongoing conversation naturally, acknowledging the latest flow of the chat.',
+        '- Match the responder profile, relationship, and speaking style below.',
+        '- Do not include the speaker name prefix, quotation marks, markdown, or explanations.',
+        '',
+        '[Responder profile]',
+        `Name: ${responder.displayName}`,
+        responder.relationToUser ? `Relation to {{user}}: ${responder.relationToUser}` : '',
+        responder.relationToChar ? `Relation to {{char}}: ${responder.relationToChar}` : '',
+        responder.description ? `Description: ${responder.description}` : '',
+        responder.personality ? `Speech/personality: ${responder.personality}` : '',
+        '',
+        '[Allowed participants]',
+        rosterText || '- {{user}} and {{char}}',
+        '',
+        '[Recent chat transcript]',
+        transcript || '(no prior messages)',
+        '',
+        `[Latest user message]\n${latestUserMessage || '(empty)'}`,
+        '',
+        `Output only ${responder.displayName}'s next message.`,
+    ].filter(Boolean).join('\n');
+
+    let rawReply = '';
+    if (typeof ctx.generateQuietPrompt === 'function') {
+        rawReply = await ctx.generateQuietPrompt({ quietPrompt: prompt, quietName: responder.displayName });
+    } else if (typeof ctx.generateRaw === 'function') {
+        rawReply = await ctx.generateRaw({ prompt, quietToLoud: false, trimNames: true });
+    }
+    return sanitizeGroupChatReply(rawReply, responder.displayName);
+}
+
+function pickRandomGroupResponder(candidates) {
+    if (!Array.isArray(candidates) || candidates.length === 0) return null;
+    return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+function selectGroupChatContacts(candidates, settings) {
+    const responders = [];
+    const pool = [...candidates];
+    const firstResponder = pickRandomGroupResponder(pool);
+    if (!firstResponder) return responders;
+    responders.push(firstResponder);
+    const firstIndex = pool.findIndex((entry) => entry.name === firstResponder.name && entry.type === firstResponder.type);
+    if (firstIndex !== -1) pool.splice(firstIndex, 1);
+
+    while (responders.length < settings.maxResponsesPerTurn && pool.length > 0) {
+        if (Math.random() >= (settings.extraResponseProbability / 100)) break;
+        const nextResponder = pickRandomGroupResponder(pool);
+        if (!nextResponder) break;
+        responders.push(nextResponder);
+        const nextIndex = pool.findIndex((entry) => entry.name === nextResponder.name && entry.type === nextResponder.type);
+        if (nextIndex !== -1) pool.splice(nextIndex, 1);
+    }
+    return responders;
+}
+
+function shouldSuppressMainCharacter(settings) {
+    if (settings.includeMainCharacter !== true) return true;
+    return Math.random() < (settings.contactOnlyProbability / 100);
+}
+
+function planGroupChatTurn() {
+    const settings = getGroupChatRuntimeSettings();
+    if (!settings.enabled) return null;
+    const ctx = getContext();
+    const latestMessage = ctx?.chat?.[ctx.chat.length - 1];
+    if (!latestMessage?.is_user) return null;
+    const latestText = normalizeGroupChatText(latestMessage.mes || '');
+    if (!latestText || latestText.startsWith('/')) return null;
+
+    const roster = buildGroupChatRosterEntries(settings);
+    const contactRoster = buildGroupChatContactRoster();
+    if (roster.length === 0 || contactRoster.length === 0) return null;
+    if (Math.random() >= (settings.responseProbability / 100)) return null;
+
+    const suppressMainCharacterReply = shouldSuppressMainCharacter(settings);
+    const responders = selectGroupChatContacts(contactRoster, settings);
+    if (responders.length === 0) return null;
+
+    return {
+        userMessageIndex: Number(ctx.chat.length - 1),
+        suppressMainCharacterReply,
+        responders,
+        roster,
+    };
+}
+
+let pendingGroupChatTurn = null;
+let isGroupChatExecutionInFlight = false;
+
+async function executePlannedGroupChatTurn(plan) {
+    if (!plan?.responders?.length) return;
+    const ctx = getContext();
+    if (!ctx) return;
+    const latestIdx = Number((ctx.chat?.length ?? 0) - 1);
+    if (!Number.isFinite(latestIdx) || latestIdx <= Number(plan.userMessageIndex)) return;
+    if (!ctx.chat?.[plan.userMessageIndex]?.is_user) return;
+
+    if (plan.suppressMainCharacterReply) {
+        const latestMsg = ctx.chat?.[latestIdx];
+        const canDeleteLastReply = Number.isFinite(latestIdx)
+            && latestIdx >= 0
+            && latestMsg
+            && !latestMsg.is_user
+            && typeof ctx.executeSlashCommandsWithOptions === 'function';
+        if (canDeleteLastReply) {
+            await ctx.executeSlashCommandsWithOptions(`/cut ${latestIdx}`, { showOutput: false });
+        }
+    }
+
+    for (const responder of plan.responders) {
+        const reply = await generateGroupChatReply(responder, plan.roster);
+        if (!reply) continue;
+        await slashSendAs(responder.displayName || responder.name, reply);
+    }
+}
+
 function openSettingsPanel(onBack) {
     const settings = getSettings();
 
@@ -1087,6 +1365,163 @@ function openSettingsPanel(onBack) {
         wrapper.appendChild(probTitle);
 
         wrapper.appendChild(renderFirstMsgSettingsUI(settings, saveSettings));
+        wrapper.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
+
+        const groupChatTitle = document.createElement('div');
+        groupChatTitle.className = 'slm-label';
+        groupChatTitle.textContent = '💬 단톡 자동 응답';
+        groupChatTitle.style.fontWeight = '600';
+        groupChatTitle.style.marginBottom = '6px';
+        wrapper.appendChild(groupChatTitle);
+
+        const groupChatToggleRow = document.createElement('div');
+        groupChatToggleRow.className = 'slm-settings-row';
+        const groupChatToggleLabel = document.createElement('label');
+        groupChatToggleLabel.className = 'slm-toggle-label';
+        const groupChatToggle = document.createElement('input');
+        groupChatToggle.type = 'checkbox';
+        groupChatToggle.checked = settings.groupChat?.enabled === true;
+        groupChatToggle.onchange = () => {
+            if (!settings.groupChat) settings.groupChat = { ...GROUP_CHAT_SETTINGS_DEFAULTS };
+            settings.groupChat.enabled = groupChatToggle.checked;
+            saveSettings();
+            showToast(`단톡 자동 응답: ${settings.groupChat.enabled ? 'ON' : 'OFF'}`, 'success', 1500);
+        };
+        groupChatToggleLabel.append(groupChatToggle, document.createTextNode(' 연락처의 단톡 참여 체크 항목으로 자동 응답 활성화'));
+        groupChatToggleRow.appendChild(groupChatToggleLabel);
+        wrapper.appendChild(groupChatToggleRow);
+
+        const groupChatCharRow = document.createElement('div');
+        groupChatCharRow.className = 'slm-settings-row';
+        const groupChatCharLabel = document.createElement('label');
+        groupChatCharLabel.className = 'slm-toggle-label';
+        const groupChatCharToggle = document.createElement('input');
+        groupChatCharToggle.type = 'checkbox';
+        groupChatCharToggle.checked = settings.groupChat?.includeMainCharacter !== false;
+        groupChatCharToggle.onchange = () => {
+            if (!settings.groupChat) settings.groupChat = { ...GROUP_CHAT_SETTINGS_DEFAULTS };
+            settings.groupChat.includeMainCharacter = groupChatCharToggle.checked;
+            saveSettings();
+        };
+        groupChatCharLabel.append(groupChatCharToggle, document.createTextNode(' 기본 {{char}}도 단톡 자동 응답 후보에 포함'));
+        groupChatCharRow.appendChild(groupChatCharLabel);
+        wrapper.appendChild(groupChatCharRow);
+
+        const groupChatProbRow = document.createElement('div');
+        groupChatProbRow.className = 'slm-input-row';
+        groupChatProbRow.style.marginTop = '8px';
+        const groupChatProbLbl = Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '첫 단톡 응답 확률:' });
+        const groupChatProbInput = Object.assign(document.createElement('input'), {
+            className: 'slm-input slm-input-sm',
+            type: 'number',
+            min: '0',
+            max: '100',
+            value: String(settings.groupChat?.responseProbability ?? GROUP_CHAT_SETTINGS_DEFAULTS.responseProbability),
+        });
+        groupChatProbInput.style.width = '70px';
+        const groupChatProbPctLbl = Object.assign(document.createElement('span'), { className: 'slm-label', textContent: '%' });
+        const groupChatProbApplyBtn = document.createElement('button');
+        groupChatProbApplyBtn.className = 'slm-btn slm-btn-primary slm-btn-sm';
+        groupChatProbApplyBtn.textContent = '적용';
+        groupChatProbApplyBtn.onclick = () => {
+            if (!settings.groupChat) settings.groupChat = { ...GROUP_CHAT_SETTINGS_DEFAULTS };
+            const val = parseInt(groupChatProbInput.value, 10);
+            settings.groupChat.responseProbability = Math.max(0, Math.min(100, Number.isNaN(val) ? GROUP_CHAT_SETTINGS_DEFAULTS.responseProbability : val));
+            groupChatProbInput.value = String(settings.groupChat.responseProbability);
+            saveSettings();
+            showToast(`단톡 첫 응답 확률: ${settings.groupChat.responseProbability}%`, 'success', 1500);
+        };
+        groupChatProbRow.append(groupChatProbLbl, groupChatProbInput, groupChatProbPctLbl, groupChatProbApplyBtn);
+        wrapper.appendChild(groupChatProbRow);
+
+        const groupChatExtraRow = document.createElement('div');
+        groupChatExtraRow.className = 'slm-input-row';
+        groupChatExtraRow.style.marginTop = '8px';
+        const groupChatExtraLbl = Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '추가 단톡 응답 확률:' });
+        const groupChatExtraInput = Object.assign(document.createElement('input'), {
+            className: 'slm-input slm-input-sm',
+            type: 'number',
+            min: '0',
+            max: '100',
+            value: String(settings.groupChat?.extraResponseProbability ?? GROUP_CHAT_SETTINGS_DEFAULTS.extraResponseProbability),
+        });
+        groupChatExtraInput.style.width = '70px';
+        const groupChatExtraPctLbl = Object.assign(document.createElement('span'), { className: 'slm-label', textContent: '%' });
+        const groupChatExtraApplyBtn = document.createElement('button');
+        groupChatExtraApplyBtn.className = 'slm-btn slm-btn-primary slm-btn-sm';
+        groupChatExtraApplyBtn.textContent = '적용';
+        groupChatExtraApplyBtn.onclick = () => {
+            if (!settings.groupChat) settings.groupChat = { ...GROUP_CHAT_SETTINGS_DEFAULTS };
+            const val = parseInt(groupChatExtraInput.value, 10);
+            settings.groupChat.extraResponseProbability = Math.max(0, Math.min(100, Number.isNaN(val) ? GROUP_CHAT_SETTINGS_DEFAULTS.extraResponseProbability : val));
+            groupChatExtraInput.value = String(settings.groupChat.extraResponseProbability);
+            saveSettings();
+            showToast(`단톡 추가 응답 확률: ${settings.groupChat.extraResponseProbability}%`, 'success', 1500);
+        };
+        groupChatExtraRow.append(groupChatExtraLbl, groupChatExtraInput, groupChatExtraPctLbl, groupChatExtraApplyBtn);
+        wrapper.appendChild(groupChatExtraRow);
+
+        const groupChatContactOnlyRow = document.createElement('div');
+        groupChatContactOnlyRow.className = 'slm-input-row';
+        groupChatContactOnlyRow.style.marginTop = '8px';
+        const groupChatContactOnlyLbl = Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '연락처만 응답 확률:' });
+        const groupChatContactOnlyInput = Object.assign(document.createElement('input'), {
+            className: 'slm-input slm-input-sm',
+            type: 'number',
+            min: '0',
+            max: '100',
+            value: String(settings.groupChat?.contactOnlyProbability ?? GROUP_CHAT_SETTINGS_DEFAULTS.contactOnlyProbability),
+        });
+        groupChatContactOnlyInput.style.width = '70px';
+        const groupChatContactOnlyPctLbl = Object.assign(document.createElement('span'), { className: 'slm-label', textContent: '%' });
+        const groupChatContactOnlyApplyBtn = document.createElement('button');
+        groupChatContactOnlyApplyBtn.className = 'slm-btn slm-btn-primary slm-btn-sm';
+        groupChatContactOnlyApplyBtn.textContent = '적용';
+        groupChatContactOnlyApplyBtn.onclick = () => {
+            if (!settings.groupChat) settings.groupChat = { ...GROUP_CHAT_SETTINGS_DEFAULTS };
+            const val = parseInt(groupChatContactOnlyInput.value, 10);
+            settings.groupChat.contactOnlyProbability = Math.max(0, Math.min(100, Number.isNaN(val) ? GROUP_CHAT_SETTINGS_DEFAULTS.contactOnlyProbability : val));
+            groupChatContactOnlyInput.value = String(settings.groupChat.contactOnlyProbability);
+            saveSettings();
+            showToast(`연락처만 응답 확률: ${settings.groupChat.contactOnlyProbability}%`, 'success', 1500);
+        };
+        groupChatContactOnlyRow.append(groupChatContactOnlyLbl, groupChatContactOnlyInput, groupChatContactOnlyPctLbl, groupChatContactOnlyApplyBtn);
+        wrapper.appendChild(groupChatContactOnlyRow);
+
+        const groupChatMaxRow = document.createElement('div');
+        groupChatMaxRow.className = 'slm-input-row';
+        groupChatMaxRow.style.marginTop = '8px';
+        const groupChatMaxLbl = Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '한 턴 최대 응답 수:' });
+        const groupChatMaxInput = Object.assign(document.createElement('input'), {
+            className: 'slm-input slm-input-sm',
+            type: 'number',
+            min: '1',
+            max: '3',
+            value: String(settings.groupChat?.maxResponsesPerTurn ?? GROUP_CHAT_SETTINGS_DEFAULTS.maxResponsesPerTurn),
+        });
+        groupChatMaxInput.style.width = '70px';
+        const groupChatMaxApplyBtn = document.createElement('button');
+        groupChatMaxApplyBtn.className = 'slm-btn slm-btn-primary slm-btn-sm';
+        groupChatMaxApplyBtn.textContent = '적용';
+        groupChatMaxApplyBtn.onclick = () => {
+            if (!settings.groupChat) settings.groupChat = { ...GROUP_CHAT_SETTINGS_DEFAULTS };
+            const val = parseInt(groupChatMaxInput.value, 10);
+            settings.groupChat.maxResponsesPerTurn = Math.max(1, Math.min(3, Number.isNaN(val) ? GROUP_CHAT_SETTINGS_DEFAULTS.maxResponsesPerTurn : val));
+            groupChatMaxInput.value = String(settings.groupChat.maxResponsesPerTurn);
+            saveSettings();
+            showToast(`단톡 최대 응답 수: ${settings.groupChat.maxResponsesPerTurn}`, 'success', 1500);
+        };
+        groupChatMaxRow.append(groupChatMaxLbl, groupChatMaxInput, groupChatMaxApplyBtn);
+        wrapper.appendChild(groupChatMaxRow);
+
+        const groupChatHint = document.createElement('div');
+        groupChatHint.className = 'slm-label';
+        groupChatHint.style.fontSize = '12px';
+        groupChatHint.style.opacity = '0.8';
+        groupChatHint.style.marginTop = '6px';
+        groupChatHint.textContent = '연락처만 응답 확률이 발동하면 이번 턴의 기본 {{char}} 응답은 지우고, 체크된 연락처가 무작위로 답합니다.';
+        wrapper.appendChild(groupChatHint);
+
         wrapper.appendChild(Object.assign(document.createElement('hr'), { className: 'slm-hr' }));
 
         const snsProbRow = document.createElement('div');
@@ -3483,13 +3918,15 @@ async function init() {
                         .finally(() => { snsReactionInFlight = false; });
                 }
             }
-            if (!isModuleEnabled('call')) return;
-            const callProb = getSettings().proactiveCallProbability ?? 0;
-            const forceCall = hasForcedCallIntentFromLatestUserMessage();
-            if (callProb > 0 || forceCall) {
-                triggerProactiveIncomingCall(callProb, { deferUntilAiResponse: true, force: forceCall })
-                    .catch(e => console.error('[ST-LifeSim] 선전화 트리거 오류:', e));
+            if (isModuleEnabled('call')) {
+                const callProb = getSettings().proactiveCallProbability ?? 0;
+                const forceCall = hasForcedCallIntentFromLatestUserMessage();
+                if (callProb > 0 || forceCall) {
+                    triggerProactiveIncomingCall(callProb, { deferUntilAiResponse: true, force: forceCall })
+                        .catch(e => console.error('[ST-LifeSim] 선전화 트리거 오류:', e));
+                }
             }
+            pendingGroupChatTurn = planGroupChatTurn();
         });
     }
 
@@ -3499,6 +3936,14 @@ async function init() {
             trackGifticonUsageFromCharacterMessage();
             await applyCharacterEmoticonDisplayMode().catch((e) => console.error('[ST-LifeSim] 이모티콘 표시 모드 적용 오류:', e));
             await applyCharacterImageDisplayMode().catch((e) => console.error('[ST-LifeSim] 이미지 표시 모드 적용 오류:', e));
+            if (!isGroupChatExecutionInFlight && pendingGroupChatTurn) {
+                const plan = pendingGroupChatTurn;
+                pendingGroupChatTurn = null;
+                isGroupChatExecutionInFlight = true;
+                await executePlannedGroupChatTurn(plan)
+                    .catch((e) => console.error('[ST-LifeSim] 단톡 자동 응답 오류:', e))
+                    .finally(() => { isGroupChatExecutionInFlight = false; });
+            }
         });
     }
 
