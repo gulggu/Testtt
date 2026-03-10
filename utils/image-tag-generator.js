@@ -125,7 +125,7 @@ function buildCharacterAwarePrompt(characters, appearanceVarMap, additionalPromp
         '14) Always include at least one framing tag and one setting tag.',
         '15) Character appearance tags in the final prompt MUST be wrapped in square brackets with the format [Name: appearance tags].',
         '16) Only include characters that are relevant to the described scene.',
-        '17) If you include a character, do not omit their core appearance tags such as hair, eyes, signature outfit/clothing, or other defining visual traits from the provided appearance tags.',
+        '17) If you include a character, do not omit their core appearance tags such as hair, eyes, signature outfit/clothing, or other defining visual traits from the character\'s provided appearance data.',
         '',
         'EXAMPLE:',
         '* Input: "Alice and Bob go to cafe"',
@@ -717,6 +717,11 @@ function safeAppearanceGroup(group) {
     return safeTags(trimmed);
 }
 
+/**
+ * Parses an appearance group like "Name: tag1, tag2" into a structured name/tags pair.
+ * @param {string} group
+ * @returns {{ name: string, tags: string[] }}
+ */
 function parseAppearanceGroup(group) {
     const trimmed = String(group || '').trim();
     if (!trimmed) return { name: '', tags: [] };
@@ -730,6 +735,12 @@ function parseAppearanceGroup(group) {
     };
 }
 
+/**
+ * Builds a short list of core appearance tags, prioritizing visual identity tags first.
+ * Priority order: tags matching APPEARANCE_TAG_PATTERN, then the first 4 original tags, capped at 8.
+ * @param {string} tagsText
+ * @returns {string[]}
+ */
 function buildCoreAppearanceTags(tagsText) {
     const tags = splitTags(tagsText);
     const prioritized = [];
@@ -744,6 +755,12 @@ function buildCoreAppearanceTags(tagsText) {
     return prioritized.slice(0, 8);
 }
 
+/**
+ * Adds any missing core appearance tags from the source appearance string to an existing group.
+ * @param {string} group
+ * @param {string} sourceAppearanceTags
+ * @returns {string}
+ */
 function mergeAppearanceGroupWithCore(group, sourceAppearanceTags) {
     const { name, tags } = parseAppearanceGroup(group);
     if (!name) return safeAppearanceGroup(group);
@@ -757,6 +774,12 @@ function mergeAppearanceGroupWithCore(group, sourceAppearanceTags) {
     return safeAppearanceGroup(`${name}: ${merged.join(', ')}`);
 }
 
+/**
+ * Enriches appearance groups with missing core tags from matched contact appearance data.
+ * @param {string[]} [appearanceGroups]
+ * @param {Array<{name?: string, appearanceTags?: string}>} [matched]
+ * @returns {string[]}
+ */
 function mergeAppearanceGroupsWithMatched(appearanceGroups = [], matched = []) {
     if (!Array.isArray(appearanceGroups) || appearanceGroups.length === 0) return [];
     if (!Array.isArray(matched) || matched.length === 0) {

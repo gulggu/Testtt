@@ -34,6 +34,8 @@
   --slm-shadow: 0 12px 40px rgba(120,80,200,0.12), 0 4px 12px rgba(0,0,0,0.08);
   --slm-z: 99999;
   --slm-emoticon-radius: 10px;
+  /* 56px image + top margin + 2 lines of caption/padding fits without clipping on the dense mobile-like grid */
+  --slm-emoticon-cell-min-height: 98px;
 }
 
 /* 다크 모드 감지 */
@@ -879,7 +881,7 @@ body[data-theme="dark"],
 
 .slm-emoticon-cell {
   position: relative;
-  min-height: 98px;
+  min-height: var(--slm-emoticon-cell-min-height);
   border-radius: var(--slm-emoticon-radius);
   background: var(--slm-bg-secondary);
   border: 1.5px solid var(--slm-border);

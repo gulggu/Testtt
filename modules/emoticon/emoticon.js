@@ -40,6 +40,7 @@ const MODULE_KEY = 'emoticons';
 const CATEGORY_AI_KEY = 'emoticon-category-ai';
 const CHAR_CATEGORY_AI_KEY = 'emoticon-char-category-ai';
 const CATEGORY_VISIBILITY_KEY = 'emoticon-category-visibility';
+const EMOTICON_HINT_TEXT_TEMPLATE = '{charName} 기준으로 AI 사용 가능 카테고리가 적용됩니다. 탭으로 카테고리를 전환하고, 길게/우클릭으로 편집 메뉴를 열 수 있습니다.';
 // 지원 형식:
 // - [[emoticon:이름]]
 // - <emoticon:이름>
@@ -296,7 +297,7 @@ function buildEmoticonContent() {
     const currentCharName = getCurrentCharName();
     const helperCard = document.createElement('div');
     helperCard.className = 'slm-phone-hint-card slm-emoticon-hint';
-    helperCard.textContent = `${currentCharName || '현재 캐릭터'} 기준으로 AI 사용 가능 카테고리가 적용됩니다. 탭으로 카테고리를 전환하고, 길게/우클릭으로 편집 메뉴를 열 수 있습니다.`;
+    helperCard.textContent = EMOTICON_HINT_TEXT_TEMPLATE.replace('{charName}', currentCharName || '현재 캐릭터');
     wrapper.appendChild(helperCard);
 
     // 카테고리 탭바

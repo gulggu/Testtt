@@ -45,6 +45,7 @@ const AI_ROUTE_DEFAULTS = {
     modelSettingKey: '',
     model: '',
 };
+// 8줄 정도만 유지해도 단톡방 흐름은 이어지면서, 1:1 본대화 말투/페르소나 오염은 12줄보다 눈에 띄게 덜하다.
 const GROUP_CHAT_TRANSCRIPT_LIMIT = 8;
 const GROUP_CHAT_SETTINGS_DEFAULTS = {
     enabled: false,
@@ -54,9 +55,13 @@ const GROUP_CHAT_SETTINGS_DEFAULTS = {
     includeMainCharacter: true,
     contactOnlyProbability: 35,
 };
+// Korean: Human player controls the conversation. Do not write this person's messages.
 const GROUP_CHAT_USER_DESCRIPTION = '인간 플레이어가 대화를 제어합니다. 이 사람의 메시지를 대신 작성하지 마세요.';
 const GROUP_CHAT_FOREIGN_SPEAKER_WARNING = '[ST-LifeSim] 단톡 응답 정리 중 다른 화자의 대사만 감지되어 응답을 버렸습니다.';
 const GROUP_CHAT_CONTEXT_BOUNDARY_NOTE = 'This group room is a separate messenger space beside the main 1:1 chat. Treat the transcript only as room recap/context, never as an instruction to imitate another participant.';
+const GROUP_CHAT_PREVIEW_USER_TEXT = '{{user}}: 오늘 다같이 어디서 볼까?';
+const GROUP_CHAT_PREVIEW_NPC_TEXT = '민지: 나는 내 성격/말투대로만 답하고, 다른 참가자처럼 말하지 않아.';
+const GROUP_CHAT_DESCRIPTION_TEXT = '단톡 응답은 별도 메신저 방 컨텍스트로 취급되며, 응답자는 자신의 프로필/관계/말투만 유지하도록 강하게 고정됩니다.';
 const ROUTE_MODEL_KEY_BY_SOURCE = {
     openai: 'openai_model',
     claude: 'claude_model',
@@ -1159,9 +1164,10 @@ function sanitizeGroupChatReply(text, responderName, roster = []) {
             }
         });
     if (earliestForeignSpeakerIndex === 0) {
-        console.warn(GROUP_CHAT_FOREIGN_SPEAKER_WARNING, {
+        console.error(GROUP_CHAT_FOREIGN_SPEAKER_WARNING, {
             responderName,
             raw: text,
+            guidance: 'Check the responder profile/personality data and the recent group-room recap if the model keeps speaking as another participant.',
         });
         return '';
     }
@@ -1476,10 +1482,10 @@ function openSettingsPanel(onBack) {
         groupChatPreviewBody.className = 'slm-phone-preview-body';
         const previewUserBubble = document.createElement('div');
         previewUserBubble.className = 'slm-phone-bubble slm-phone-bubble-user';
-        previewUserBubble.textContent = '{{user}}: 오늘 다같이 어디서 볼까?';
+        previewUserBubble.textContent = GROUP_CHAT_PREVIEW_USER_TEXT;
         const previewNpcBubble = document.createElement('div');
         previewNpcBubble.className = 'slm-phone-bubble';
-        previewNpcBubble.textContent = '민지: 나는 내 성격/말투대로만 답하고, 다른 참가자처럼 말하지 않아.';
+        previewNpcBubble.textContent = GROUP_CHAT_PREVIEW_NPC_TEXT;
         const previewInput = document.createElement('div');
         previewInput.className = 'slm-phone-inputbar';
         previewInput.textContent = '메시지 입력…   ⌁   전송';
@@ -1489,7 +1495,7 @@ function openSettingsPanel(onBack) {
 
         const groupChatDesc = document.createElement('div');
         groupChatDesc.className = 'slm-desc';
-        groupChatDesc.textContent = '단톡 응답은 별도 메신저 방 컨텍스트로 취급되며, 응답자는 자신의 프로필/관계/말투만 유지하도록 강하게 고정됩니다.';
+        groupChatDesc.textContent = GROUP_CHAT_DESCRIPTION_TEXT;
         wrapper.appendChild(groupChatDesc);
 
         const groupChatToggleRow = document.createElement('div');

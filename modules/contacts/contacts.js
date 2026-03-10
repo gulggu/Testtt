@@ -67,27 +67,24 @@ const MODEL_KEY_BY_SOURCE = {
  */
 
 /**
- * 저장된 연락처 목록을 불러온다
- * @param {'chat'|'character'} binding
- * @returns {Contact[]}
- */
-/**
  * Generates a stable fallback id for legacy contact data that lacks an id field.
  * @param {Partial<Contact>} contact
  * @param {'chat'|'character'} binding
  * @returns {string}
  */
 function buildLegacyContactId(contact, binding) {
+    if (!contact || typeof contact !== 'object') {
+        return `legacy:${binding}:unknown`;
+    }
     const seed = [
         binding,
-        ...LEGACY_CONTACT_ID_FIELDS.map((field) => String(contact?.[field] || '').trim().toLowerCase()),
+        ...LEGACY_CONTACT_ID_FIELDS.map((field) => encodeURIComponent(String(contact?.[field] || '').trim().toLowerCase())),
     ].join(':');
     return `legacy:${seed}`;
 }
 
 /**
- * Determines whether a contact can participate in group-chat auto replies.
- * Excludes auto-generated {{user}}/{{char}} contacts.
+ * Evaluates raw group-chat eligibility flags before a full contact object exists.
  * @param {boolean} groupChatParticipant
  * @param {boolean} isUserAuto
  * @param {boolean} isCharAuto
