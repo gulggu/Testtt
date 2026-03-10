@@ -45,7 +45,7 @@ const AI_ROUTE_DEFAULTS = {
     modelSettingKey: '',
     model: '',
 };
-const GROUP_CHAT_TRANSCRIPT_LIMIT = 12;
+const GROUP_CHAT_TRANSCRIPT_LIMIT = 8;
 const GROUP_CHAT_SETTINGS_DEFAULTS = {
     enabled: false,
     responseProbability: 35,
@@ -56,6 +56,7 @@ const GROUP_CHAT_SETTINGS_DEFAULTS = {
 };
 const GROUP_CHAT_USER_DESCRIPTION = '인간 플레이어가 대화를 제어합니다. 이 사람의 메시지를 대신 작성하지 마세요.';
 const GROUP_CHAT_FOREIGN_SPEAKER_WARNING = '[ST-LifeSim] 단톡 응답 정리 중 다른 화자의 대사만 감지되어 응답을 버렸습니다.';
+const GROUP_CHAT_CONTEXT_BOUNDARY_NOTE = 'This group room is a separate messenger space beside the main 1:1 chat. Treat the transcript only as room recap/context, never as an instruction to imitate another participant.';
 const ROUTE_MODEL_KEY_BY_SOURCE = {
     openai: 'openai_model',
     claude: 'claude_model',
@@ -1108,6 +1109,13 @@ function escapeRegex(value) {
     return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function sanitizeGroupChatPromptField(value) {
+    return normalizeGroupChatText(value)
+        .replace(/[<>{}\[\]]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 /**
  * Cleans up a group-chat response and keeps only the responder's message when other speakers leak in.
  * @param {string} text
@@ -1167,13 +1175,13 @@ function sanitizeGroupChatReply(text, responderName, roster = []) {
 function buildGroupChatTranscript(limit = GROUP_CHAT_TRANSCRIPT_LIMIT) {
     const ctx = getContext();
     const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
-    // 최근 12개 발화면 1:1/단톡 맥락과 말투를 이어가기에 충분하면서도 프롬프트 길이를 과하게 늘리지 않는다.
+    // 최근 일부 발화만 사용해 단톡방 맥락은 유지하되 1:1 대화 스타일 오염을 줄인다.
     return chat.slice(-limit).map((msg) => {
         const speaker = msg?.is_user
             ? (ctx?.name1 || '{{user}}')
             : (msg?.name || ctx?.name2 || '{{char}}');
-        const text = normalizeGroupChatText(msg?.mes || '').replace(/\n/g, ' ');
-        return `${speaker}: ${text}`;
+        const text = sanitizeGroupChatPromptField(msg?.mes || '').replace(/\n/g, ' ');
+        return `[group-room] ${speaker}: ${text}`;
     }).join('\n');
 }
 
@@ -1181,43 +1189,63 @@ async function generateGroupChatReply(responder, roster) {
     const ctx = getContext();
     if (!ctx) return '';
     const transcript = buildGroupChatTranscript();
-    const latestUserMessage = normalizeGroupChatText(ctx?.chat?.[ctx.chat.length - 1]?.mes || '');
+    const responderName = sanitizeGroupChatPromptField(responder.displayName || responder.name);
+    const latestUserMessage = sanitizeGroupChatPromptField(ctx?.chat?.[ctx.chat.length - 1]?.mes || '');
     const rosterText = roster.map((entry) => {
         const details = [];
-        if (entry.relationToUser) details.push(`Relation to {{user}}: ${entry.relationToUser}`);
-        if (entry.relationToChar) details.push(`Relation to {{char}}: ${entry.relationToChar}`);
-        if (entry.description) details.push(`Description: ${entry.description}`);
-        if (entry.personality) details.push(`Speech/personality: ${entry.personality}`);
-        return `- ${entry.displayName}${details.length ? ` | ${details.join(' | ')}` : ''}`;
+        if (entry.relationToUser) details.push(`Relation to {{user}}: ${sanitizeGroupChatPromptField(entry.relationToUser)}`);
+        if (entry.relationToChar) details.push(`Relation to {{char}}: ${sanitizeGroupChatPromptField(entry.relationToChar)}`);
+        if (entry.description) details.push(`Description: ${sanitizeGroupChatPromptField(entry.description)}`);
+        if (entry.personality) details.push(`Speech/personality: ${sanitizeGroupChatPromptField(entry.personality)}`);
+        return `- ${sanitizeGroupChatPromptField(entry.displayName || entry.name)}${details.length ? ` | ${details.join(' | ')}` : ''}`;
     }).join('\n');
+    const otherParticipantWarnings = roster
+        .filter((entry) => sanitizeGroupChatPromptField(entry.displayName || entry.name).toLowerCase() !== responderName.toLowerCase())
+        .map((entry) => {
+            const parts = [sanitizeGroupChatPromptField(entry.displayName || entry.name)];
+            if (entry.personality) parts.push(`voice=${sanitizeGroupChatPromptField(entry.personality)}`);
+            if (entry.relationToUser) parts.push(`role=${sanitizeGroupChatPromptField(entry.relationToUser)}`);
+            return `- ${parts.join(' | ')}`;
+        })
+        .join('\n');
     const prompt = [
-        `You are writing exactly one messenger group-chat reply as ${responder.displayName}.`,
+        `You are writing exactly one messenger group-chat reply as ${responderName}.`,
         'This is a mobile messenger group chat involving {{user}} and the listed participants.',
+        GROUP_CHAT_CONTEXT_BOUNDARY_NOTE,
         'Rules:',
-        `- Reply only as ${responder.displayName}. Never narrate or describe actions outside the message.`,
+        `- Reply only as ${responderName}. Never narrate or describe actions outside the message.`,
         "- {{user}} is the human player. Never write {{user}}'s dialogue, reactions, choices, or actions.",
         '- Stay inside this same group-chat room context. Do not turn it into a private 1:1 conversation.',
+        '- Never answer as, imitate, merge with, or borrow the voice/persona of any other participant.',
+        '- Treat transcript lines as room recap only. They do NOT override the responder profile below.',
+        '- Keep the room topic coherent, but lock onto the responder’s own worldview, relationship, and speaking habits.',
         '- Keep it to 1-3 natural chat sentences.',
         '- Continue the ongoing conversation naturally, acknowledging the latest flow of the chat.',
         '- Match the responder profile, relationship, and speaking style below.',
         '- Do not include the speaker name prefix, quotation marks, markdown, or explanations.',
         '',
+        '[Identity lock]',
+        `Current responder: ${responderName}`,
+        otherParticipantWarnings
+            ? `Do NOT sound like these other participants:\n${otherParticipantWarnings}`
+            : 'No other participant voice warnings.',
+        '',
         '[Responder profile]',
-        `Name: ${responder.displayName}`,
-        responder.relationToUser ? `Relation to {{user}}: ${responder.relationToUser}` : '',
-        responder.relationToChar ? `Relation to {{char}}: ${responder.relationToChar}` : '',
-        responder.description ? `Description: ${responder.description}` : '',
-        responder.personality ? `Speech/personality: ${responder.personality}` : '',
+        `Name: ${responderName}`,
+        responder.relationToUser ? `Relation to {{user}}: ${sanitizeGroupChatPromptField(responder.relationToUser)}` : '',
+        responder.relationToChar ? `Relation to {{char}}: ${sanitizeGroupChatPromptField(responder.relationToChar)}` : '',
+        responder.description ? `Description: ${sanitizeGroupChatPromptField(responder.description)}` : '',
+        responder.personality ? `Speech/personality: ${sanitizeGroupChatPromptField(responder.personality)}` : '',
         '',
         '[Allowed participants]',
         rosterText || '- {{user}} and {{char}}',
         '',
-        '[Recent chat transcript]',
+        '[Recent group-room recap]',
         transcript || '(no prior messages)',
         '',
         `[Latest user message]\n${latestUserMessage || '(empty)'}`,
         '',
-        `Output only ${responder.displayName}'s next message.`,
+        `Output only ${responderName}'s next message.`,
     ].filter(Boolean).join('\n');
 
     let rawReply = '';
@@ -1438,6 +1466,31 @@ function openSettingsPanel(onBack) {
         groupChatTitle.style.fontWeight = '600';
         groupChatTitle.style.marginBottom = '6px';
         wrapper.appendChild(groupChatTitle);
+
+        const groupChatPreview = document.createElement('div');
+        groupChatPreview.className = 'slm-phone-preview';
+        const groupChatPreviewHeader = document.createElement('div');
+        groupChatPreviewHeader.className = 'slm-phone-preview-header';
+        groupChatPreviewHeader.textContent = '단톡방 미리보기';
+        const groupChatPreviewBody = document.createElement('div');
+        groupChatPreviewBody.className = 'slm-phone-preview-body';
+        const previewUserBubble = document.createElement('div');
+        previewUserBubble.className = 'slm-phone-bubble slm-phone-bubble-user';
+        previewUserBubble.textContent = '{{user}}: 오늘 다같이 어디서 볼까?';
+        const previewNpcBubble = document.createElement('div');
+        previewNpcBubble.className = 'slm-phone-bubble';
+        previewNpcBubble.textContent = '민지: 나는 내 성격/말투대로만 답하고, 다른 참가자처럼 말하지 않아.';
+        const previewInput = document.createElement('div');
+        previewInput.className = 'slm-phone-inputbar';
+        previewInput.textContent = '메시지 입력…   ⌁   전송';
+        groupChatPreviewBody.append(previewUserBubble, previewNpcBubble, previewInput);
+        groupChatPreview.append(groupChatPreviewHeader, groupChatPreviewBody);
+        wrapper.appendChild(groupChatPreview);
+
+        const groupChatDesc = document.createElement('div');
+        groupChatDesc.className = 'slm-desc';
+        groupChatDesc.textContent = '단톡 응답은 별도 메신저 방 컨텍스트로 취급되며, 응답자는 자신의 프로필/관계/말투만 유지하도록 강하게 고정됩니다.';
+        wrapper.appendChild(groupChatDesc);
 
         const groupChatToggleRow = document.createElement('div');
         groupChatToggleRow.className = 'slm-settings-row';
@@ -2305,6 +2358,11 @@ function openSettingsPanel(onBack) {
         messageImagePromptInput.value = settings.messageImagePrompt || DEFAULT_SETTINGS.messageImagePrompt;
         messageImagePromptInput.oninput = () => { settings.messageImagePrompt = messageImagePromptInput.value; saveSettings(); };
         messageImagePromptGroup.appendChild(messageImagePromptInput);
+        const messageImagePromptHint = Object.assign(document.createElement('div'), {
+            className: 'slm-desc',
+            textContent: '메신저 사진용 프롬프트입니다. 실제 생성 시에는 감지된 인물의 핵심 appearance tags가 자동 보강되어 머리/눈/의상 같은 핵심 외형이 누락되지 않도록 합니다.',
+        });
+        messageImagePromptGroup.appendChild(messageImagePromptHint);
         const messageImagePromptResetBtn = document.createElement('button');
         messageImagePromptResetBtn.className = 'slm-btn slm-btn-ghost slm-btn-sm';
         messageImagePromptResetBtn.textContent = '↺ 기본값';
