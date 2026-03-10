@@ -942,13 +942,14 @@ export function getContacts(binding = 'chat') {
  */
 export function getAppearanceTagsByName(name) {
     if (!name) return '';
-    const requestedName = String(name || '').trim();
+    const normalizeCandidates = (values) => values
+        .map(v => String(v || '').trim())
+        .filter(Boolean);
+    const requestedName = String(name).trim();
     const requestedLower = requestedName.toLowerCase();
     const allContacts = [...loadContacts('character'), ...loadContacts('chat')];
     const contact = allContacts.find((c) => {
-        const candidates = [c?.name, c?.displayName, c?.subName]
-            .map(v => String(v || '').trim())
-            .filter(Boolean);
+        const candidates = normalizeCandidates([c?.name, c?.displayName, c?.subName]);
         return candidates.some(candidate => candidate.toLowerCase() === requestedLower);
     });
     const fromContact = String(contact?.appearanceTags || '').trim();
@@ -956,21 +957,27 @@ export function getAppearanceTagsByName(name) {
     // 연락처에 외관 태그가 없으면 characterAppearanceTags 설정에서 확인
     const ext = getExtensionSettings()?.['st-lifesim'];
     const settingsTags = ext?.characterAppearanceTags || {};
-    const lookupCandidates = [
+    const lookupCandidates = normalizeCandidates([
         requestedName,
         contact?.name,
         contact?.displayName,
         contact?.subName,
-    ]
-        .map(v => String(v || '').trim())
-        .filter(Boolean);
+    ]);
     for (const candidate of lookupCandidates) {
         const directMatch = String(settingsTags?.[candidate] || '').trim();
         if (directMatch) return directMatch;
     }
-    const loweredCandidates = new Set(lookupCandidates.map(candidate => candidate.toLowerCase()));
-    const fallbackKey = Object.keys(settingsTags).find(key => loweredCandidates.has(String(key || '').trim().toLowerCase()));
-    return fallbackKey ? String(settingsTags[fallbackKey] || '').trim() : '';
+    let lowerSettingsMap = null;
+    for (const candidate of lookupCandidates) {
+        if (!lowerSettingsMap) {
+            lowerSettingsMap = new Map(
+                Object.entries(settingsTags).map(([key, value]) => [String(key || '').trim().toLowerCase(), String(value || '').trim()]),
+            );
+        }
+        const fallbackValue = lowerSettingsMap.get(candidate.toLowerCase());
+        if (fallbackValue) return fallbackValue;
+    }
+    return '';
 }
 
 /**
