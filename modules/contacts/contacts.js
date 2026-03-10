@@ -942,14 +942,35 @@ export function getContacts(binding = 'chat') {
  */
 export function getAppearanceTagsByName(name) {
     if (!name) return '';
+    const requestedName = String(name || '').trim();
+    const requestedLower = requestedName.toLowerCase();
     const allContacts = [...loadContacts('character'), ...loadContacts('chat')];
-    const contact = allContacts.find(c => c.name === name || c.displayName === name || c.subName === name);
+    const contact = allContacts.find((c) => {
+        const candidates = [c?.name, c?.displayName, c?.subName]
+            .map(v => String(v || '').trim())
+            .filter(Boolean);
+        return candidates.some(candidate => candidate.toLowerCase() === requestedLower);
+    });
     const fromContact = String(contact?.appearanceTags || '').trim();
     if (fromContact) return fromContact;
     // 연락처에 외관 태그가 없으면 characterAppearanceTags 설정에서 확인
     const ext = getExtensionSettings()?.['st-lifesim'];
-    const fromSettings = String(ext?.characterAppearanceTags?.[name] || '').trim();
-    return fromSettings;
+    const settingsTags = ext?.characterAppearanceTags || {};
+    const lookupCandidates = [
+        requestedName,
+        contact?.name,
+        contact?.displayName,
+        contact?.subName,
+    ]
+        .map(v => String(v || '').trim())
+        .filter(Boolean);
+    for (const candidate of lookupCandidates) {
+        const directMatch = String(settingsTags?.[candidate] || '').trim();
+        if (directMatch) return directMatch;
+    }
+    const loweredCandidates = new Set(lookupCandidates.map(candidate => candidate.toLowerCase()));
+    const fallbackKey = Object.keys(settingsTags).find(key => loweredCandidates.has(String(key || '').trim().toLowerCase()));
+    return fallbackKey ? String(settingsTags[fallbackKey] || '').trim() : '';
 }
 
 /**
