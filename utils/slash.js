@@ -70,7 +70,7 @@ async function applyLatestSendAsContactAvatar(name) {
             if (!existingImg) avatarFrame.appendChild(avatarImg);
         }
     } catch (error) {
-        console.warn('[ST-LifeSim] /sendas 연락처 프사 적용 실패:', error);
+        console.warn('[ST-LifeSim] /sendas 연락처 프로필 사진 적용 실패:', error);
     }
 
     if (typeof ctx?.saveChat === 'function') {

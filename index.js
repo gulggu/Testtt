@@ -1072,6 +1072,7 @@ function normalizeGroupChatText(text) {
 }
 
 function sanitizeGroupChatReply(text, responderName) {
+    // 입력 텍스트 정규화(개행/공백 정리)까지 함께 담당한다.
     let cleaned = normalizeGroupChatText(text);
     if (!cleaned) return '';
     const escapedName = String(responderName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1089,6 +1090,7 @@ function sanitizeGroupChatReply(text, responderName) {
 function buildGroupChatTranscript(limit = 12) {
     const ctx = getContext();
     const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
+    // 최근 12개 발화면 1:1/단톡 맥락과 말투를 이어가기에 충분하면서도 프롬프트 길이를 과하게 늘리지 않는다.
     return chat.slice(-limit).map((msg) => {
         const speaker = msg?.is_user
             ? (ctx?.name1 || '{{user}}')
@@ -1150,7 +1152,7 @@ async function generateGroupChatReply(responder, roster) {
 
 function pickRandomGroupResponder(candidates) {
     if (!Array.isArray(candidates) || candidates.length === 0) return null;
-    return candidates[Math.floor(Math.random() * candidates.length)] || null;
+    return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
 async function triggerGroupChatResponses() {
@@ -1322,7 +1324,7 @@ function openSettingsPanel(onBack) {
             saveSettings();
             showToast(`단톡 자동 응답: ${settings.groupChat.enabled ? 'ON' : 'OFF'}`, 'success', 1500);
         };
-        groupChatToggleLabel.append(groupChatToggle, document.createTextNode(' 연락처의 단톡 참여 체크 항목을 사용해 자동 응답 활성화'));
+        groupChatToggleLabel.append(groupChatToggle, document.createTextNode(' 연락처의 단톡 참여 체크 항목으로 자동 응답 활성화'));
         groupChatToggleRow.appendChild(groupChatToggleLabel);
         wrapper.appendChild(groupChatToggleRow);
 

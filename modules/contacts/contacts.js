@@ -751,6 +751,9 @@ function openContactDialog(existing, defaultBinding, onSave) {
             : isUserAuto ? (existing?.name || getContext()?.name1 || name)
             : name;
         const displayName = (isCharAuto || isUserAuto) && name !== canonicalName ? name : '';
+        const groupChatParticipant = (isCharAuto || isUserAuto)
+            ? !!existing?.groupChatParticipant
+            : groupParticipantCheck.checked;
         const data = {
             id: existing?.id || generateId(),
             name: canonicalName,
@@ -765,7 +768,7 @@ function openContactDialog(existing, defaultBinding, onSave) {
             phone: '',
             tags: existing?.tags || [],
             appearanceTags: fields.appearanceTags.value.trim(),
-            groupChatParticipant: (isCharAuto || isUserAuto) ? !!existing?.groupChatParticipant : groupParticipantCheck.checked,
+            groupChatParticipant,
             binding: targetBinding,
             isCharAuto,
             isUserAuto,
