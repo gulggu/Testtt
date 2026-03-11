@@ -15,6 +15,8 @@ const ROOM_MESSAGE_STORAGE_LIMIT = 80;
 const ROOM_AUTONOMY_DELAY_MIN_MS = 2500;
 const ROOM_AUTONOMY_DELAY_MAX_MS = 6500;
 const ROOM_IMAGE_TEXT_TEMPLATE_DEFAULT = '[사진: {description}]';
+const ROOM_ICON_GROUP = '👥';
+const ROOM_ICON_DIRECT = '💬';
 const ROOM_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen the selected messenger-room responder would naturally TAKE A PHOTO with their phone and SEND IT in this room, insert a <pic prompt="image description in Korean for the photo situation"> tag at that point.\nOnly use <pic> for a photo the responder could realistically take and deliberately send.\nDo not generate scene narration, mood illustrations, or impossible third-person shots.\n</image_generation_rule>';
 const ROOM_PIC_TAG_REGEX = /<?pic\s+[^>\n]*?\bprompt\s*=\s*(?:"([^"]*)"|'([^']*)')(?:\s*\/?\s*>)?/gi;
 const ROOM_DEFAULTS = {
@@ -1329,7 +1331,7 @@ function buildRoomListContent(onBack, initialRoomId = null) {
             const icon = document.createElement('div');
             icon.className = 'slm-room-card-icon';
             const memberCount = room.members?.length || 0;
-            icon.textContent = memberCount > 2 ? '👥' : '💬';
+            icon.textContent = memberCount > 2 ? ROOM_ICON_GROUP : ROOM_ICON_DIRECT;
 
             // 오른쪽 본문 영역
             const body = document.createElement('div');

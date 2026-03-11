@@ -1478,7 +1478,7 @@ body[data-theme="dark"],
 /* 컨텍스트 메뉴 — iOS 시트 스타일 */
 .slm-context-menu {
   position: fixed;
-  background: rgba(248,248,250,0.92);
+  background: var(--slm-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 0.5px solid var(--slm-separator);
@@ -1505,8 +1505,8 @@ body[data-theme="dark"],
   -webkit-tap-highlight-color: transparent;
 }
 .slm-context-item:last-child { border-bottom: none; }
-.slm-context-item:hover { background: rgba(0,0,0,0.04); }
-.slm-context-item:active { background: rgba(0,0,0,0.08); }
+.slm-context-item:hover { background: var(--slm-bg-secondary); }
+.slm-context-item:active { background: var(--slm-bg-tertiary); }
 .slm-context-danger { color: var(--slm-danger) !important; }
 
 /* ──────────────────────────────────────────
