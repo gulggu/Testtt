@@ -30,12 +30,13 @@ async function run(command) {
 }
 
 function escapeSlashPromptText(text) {
+    // SillyTavern slash parser treats `|` as a pipe separator, so escape it to keep prompt text intact.
     return String(text ?? '')
         .replace(/\\/g, '\\\\')
         .replace(/\|/g, '\\|');
 }
 
-async function generateQuietText(prompt, quietName = null) {
+async function generateQuietText(prompt) {
     const ctx = getContext();
     if (prompt == null) return '';
     const quietPrompt = String(prompt).trim();
@@ -49,7 +50,7 @@ async function generateQuietText(prompt, quietName = null) {
         }
         return String(result?.pipe ?? result ?? '').trim();
     } catch (error) {
-        console.warn('[ST-LifeSim] /gen lock=off quiet=true 조용한 생성 실패:', error, quietName ? `(quietName: ${quietName})` : '');
+        console.warn('[ST-LifeSim] /gen lock=off quiet=true 조용한 생성 실패:', error);
         return '';
     }
 }
