@@ -66,7 +66,9 @@ export function createPopup({ id, title, content, className = '', footer, onClos
 
     const titleRight = document.createElement('div');
     titleRight.className = 'slm-panel-title-actions';
-    const actionList = Array.isArray(headerActions) ? headerActions : [headerActions];
+    const actionList = headerActions == null
+        ? []
+        : (Array.isArray(headerActions) ? headerActions : [headerActions]);
     actionList.filter((action) => action instanceof HTMLElement).forEach((action) => {
         titleRight.appendChild(action);
     });

@@ -1239,7 +1239,7 @@ export function getAllContacts() {
         const identifier = String(contact?.id || '').trim() || String(contact?.name || '').trim();
         if (!identifier) return;
         const key = `${contact?.binding === 'character' ? 'character' : 'chat'}:${identifier}`;
-        if (!key || merged.has(key)) return;
+        if (merged.has(key)) return;
         merged.set(key, contact);
     });
     return [...merged.values()];
