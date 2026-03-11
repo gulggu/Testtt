@@ -1251,8 +1251,8 @@ body[data-theme="dark"],
 .slm-room-message-bubble {
   display: inline-block;
   align-self: flex-start;
-  width: fit-content;
-  max-width: 100%;
+  width: fit-content !important;
+  max-width: 100% !important;
   box-sizing: border-box;
   padding: 9px 13px;
   border-radius: 18px 18px 18px 4px; /* 수신: 왼쪽 하단 꺾임 */
@@ -1300,6 +1300,7 @@ body[data-theme="dark"],
 /* 사용자 메시지 버블 — iMessage 파란색 */
 .slm-room-message.user .slm-room-message-bubble {
   align-self: flex-end;
+  width: fit-content !important;
   background: var(--slm-bubble-user-bg);
   color: var(--slm-bubble-user-text);
   border-radius: 18px 18px 4px 18px; /* 발신: 오른쪽 하단 꺾임 */
@@ -1887,7 +1888,7 @@ body[data-theme="dark"],
 /* ──────────────────────────────────────────
    SNS 패널
 ────────────────────────────────────────── */
-.slm-sns-wrapper { display: flex; flex-direction: column; gap: 10px; }
+.slm-sns-wrapper { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow: hidden; }
 .slm-feed-list { display: flex; flex-direction: column; gap: 12px; max-height: 420px; overflow-y: auto; }
 
 .slm-post-card {
@@ -2194,6 +2195,8 @@ body[data-theme="dark"],
 .slm-feed-list {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   gap: 0;
   max-height: 520px;
   overflow-y: auto;

@@ -1,6 +1,7 @@
 import { getContext } from '../../utils/st-context.js';
 import { getDefaultBinding, getExtensionSettings, loadData, saveData } from '../../utils/storage.js';
 import { createPopup, closePopup } from '../../utils/popup.js';
+import { injectContext, registerContextBuilder } from '../../utils/context-inject.js';
 import { getAppearanceTagsByName, getContacts } from '../contacts/contacts.js';
 import { buildAiEmoticonContext, replaceAiSelectedEmoticons, buildEmoticonMessageHtml, buildEmoticonPickerContent } from '../emoticon/emoticon.js';
 import { translateTextToKorean } from '../sns/sns.js';
@@ -16,6 +17,7 @@ const ROOM_MESSAGE_LIMIT = 18;
 const ROOM_MESSAGE_STORAGE_LIMIT = 80;
 const ROOM_AUTONOMY_DELAY_MIN_MS = 2500;
 const ROOM_AUTONOMY_DELAY_MAX_MS = 6500;
+const ROOM_AMBIENT_MIN_INTERVAL_SEC = 5;
 const ROOM_IMAGE_TEXT_TEMPLATE_DEFAULT = '[사진: {description}]';
 const ROOM_ICON_GROUP = '👥';
 const ROOM_ICON_DIRECT = '💬';
@@ -24,16 +26,36 @@ const ROOM_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen the responder would
 const ROOM_PIC_TAG_REGEX = /<?pic\s+[^>\n]*?\bprompt\s*=\s*(?:"([^"]*)"|'([^']*)')(?:\s*\/?\s*>)?/gi;
 const ROOM_EMOTICON_ONLY_HTML_REGEX = /^<img\b[^>]*aria-label="[^"]*이모티콘[^"]*"[^>]*>$/i;
 const ROOM_EMOTICON_TOKEN_ONLY_REGEX = /^\s*\[\[\s*emoticon\s*:\s*[^\]]+\s*\]\]\s*$/i;
+const ROOM_INDIRECT_CONTEXT_RULES = [
+    'Important: {{char}} is NOT a member of this room, so {{char}} must not know or quote the exact private messages here.',
+    'If this topic comes up, {{char}} may only mention it indirectly, cautiously, or as a vague suspicion based on what {{user}} could have noticed or voluntarily mentioned.',
+];
 const ROOM_DEFAULTS = {
     autoReplyEnabled: true,
     responseProbability: 100,
     extraResponseProbability: 35,
     maxResponses: 2,
+    includeInContext: false,
+    ambientEnabled: false,
+    ambientIntervalSec: 30,
+    ambientProbability: 12,
 };
 const ROOM_BINDINGS = ['chat', 'character'];
 const ROOM_AVATAR_DEFAULTS = { width: 48, height: 48, scale: 100, positionX: 50, positionY: 50 };
 const ROOM_AVATAR_PREVIEW_DEFAULTS = { width: 72, height: 72, scale: 100, positionX: 50, positionY: 50 };
 const roomAutoReplyState = new Map();
+const roomAmbientState = new Map();
+let roomContextRefreshTimer = null;
+
+function queueRoomContextRefresh() {
+    if (roomContextRefreshTimer !== null) clearTimeout(roomContextRefreshTimer);
+    roomContextRefreshTimer = setTimeout(() => {
+        roomContextRefreshTimer = null;
+        void injectContext().catch((error) => {
+            console.error('[ST-LifeSim] 메신저 방 컨텍스트 갱신 오류:', error);
+        });
+    }, 0);
+}
 
 function normalizeRoomBinding(binding) {
     return binding === 'character' ? 'character' : 'chat';
@@ -256,6 +278,8 @@ function upsertMessengerRoom(nextRoom) {
         if (binding === room.binding) rooms.push(room);
         saveMessengerRooms(rooms, binding);
     });
+    syncAmbientRoomSchedules();
+    queueRoomContextRefresh();
     return room;
 }
 
@@ -264,6 +288,9 @@ function deleteMessengerRoom(roomId) {
         const nextRooms = loadMessengerRooms(binding).filter((room) => room.id !== roomId);
         saveMessengerRooms(nextRooms, binding);
     });
+    clearRoomAmbientSchedule(roomId);
+    syncAmbientRoomSchedules();
+    queueRoomContextRefresh();
 }
 
 function getMessengerRoomById(roomId) {
@@ -305,6 +332,12 @@ function clampRoomResponseCount(value, fallback) {
     const parsed = Number.parseInt(value, 10);
     if (!Number.isFinite(parsed)) return fallback;
     return Math.max(1, Math.min(3, parsed));
+}
+
+function clampRoomAmbientInterval(value, fallback = ROOM_DEFAULTS.ambientIntervalSec) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(ROOM_AMBIENT_MIN_INTERVAL_SEC, Math.min(3600, parsed));
 }
 
 function normalizeQuotesForRoomPicTag(text) {
@@ -465,6 +498,12 @@ function clearRoomAutoReplySchedule(roomId) {
     roomAutoReplyState.delete(roomId);
 }
 
+function clearRoomAmbientSchedule(roomId) {
+    const state = roomAmbientState.get(roomId);
+    if (state?.timerId) clearTimeout(state.timerId);
+    roomAmbientState.delete(roomId);
+}
+
 function getContactMemberKey(contact) {
     return buildContactMemberKey(contact);
 }
@@ -588,6 +627,50 @@ function buildRoomTranscript(room, candidateMap) {
         return `[room] ${author}: ${normalizeRoomPromptText(message?.text || '')}`;
     }).join('\n');
 }
+
+function buildIndirectRoomContext(room, candidateMap) {
+    const memberLabels = (Array.isArray(room?.members) ? room.members : [])
+        .map((memberKey) => getMemberDisplayLabel(memberKey, candidateMap))
+        .filter(Boolean);
+    const categories = normalizeCategoryList(room?.categories);
+    const roomType = isGroupMessengerRoom(room) ? 'group chat' : 'private chat';
+    const updatedAt = Number(room?.updatedAt) ? new Date(room.updatedAt).toLocaleString('ko-KR') : '';
+    return [
+        `[Messenger room: ${getRoomTitle(room, candidateMap)}]`,
+        `Type: ${roomType}`,
+        memberLabels.length ? `Members: ${memberLabels.join(', ')}` : '',
+        categories.length ? `Categories: ${categories.join(', ')}` : '',
+        updatedAt ? `Recent activity: ${updatedAt}` : '',
+        ...ROOM_INDIRECT_CONTEXT_RULES,
+    ].filter(Boolean).join('\n');
+}
+
+function buildIncludedRoomContext(room, candidateMap) {
+    const transcript = buildRoomTranscript(room, candidateMap);
+    if (isMainCharInRoom(room)) {
+        return [
+            `[Messenger room: ${getRoomTitle(room, candidateMap)}]`,
+            'Important: {{char}} is a member of this room and may naturally bring up relevant details from this room while talking to {{user}}.',
+            transcript ? `[Recent messages]\n${transcript}` : '[Recent messages]\n(no recent room messages)',
+        ].join('\n');
+    }
+    return buildIndirectRoomContext(room, candidateMap);
+}
+
+registerContextBuilder('messenger-rooms', () => {
+    const candidateMap = getCandidateMap();
+    const sections = loadMessengerRooms()
+        .filter((room) => room?.settings?.includeInContext === true)
+        .slice(-5)
+        .map((room) => buildIncludedRoomContext(room, candidateMap))
+        .filter(Boolean);
+    if (sections.length === 0) return '';
+    return `[MESSENGER ROOMS]\n${sections.join('\n\n')}\n[/MESSENGER ROOMS]`;
+});
+
+setTimeout(() => {
+    syncAmbientRoomSchedules();
+}, 0);
 
 function getRoomImageSettings() {
     const ext = getExtensionSettings()?.['st-lifesim'] || {};
@@ -768,7 +851,7 @@ function pickRandomResponders(room) {
     return responders;
 }
 
-async function generateRoomReply(room, responderKey, candidateMap) {
+async function generateRoomReply(room, responderKey, candidateMap, options = {}) {
     const ctx = getContext();
     if (!ctx) return '';
     const imageSettings = getRoomImageSettings();
@@ -776,6 +859,7 @@ async function generateRoomReply(room, responderKey, candidateMap) {
     const memberLabels = room.members.map((memberKey) => getMemberDisplayLabel(memberKey, candidateMap));
     const transcript = buildRoomTranscript(room, candidateMap);
     const latestUserMessage = normalizeRoomPromptText(room.messages[room.messages.length - 1]?.text || '');
+    const triggerMode = String(options?.triggerMode || '').trim();
     const emoticonContext = buildAiEmoticonContext(responderName);
     const rosterText = room.members.map((memberKey) => {
         const candidate = candidateMap.get(normalizeRoomMemberKey(memberKey, candidateMap));
@@ -788,6 +872,14 @@ async function generateRoomReply(room, responderKey, candidateMap) {
     }).join('\n');
     const otherMembers = memberLabels.filter((label) => label.toLowerCase() !== responderName.toLowerCase());
     const responderProfile = candidateMap.get(normalizeRoomMemberKey(responderKey, candidateMap));
+    const ambientPromptLine = triggerMode === 'group-free-chat'
+        ? '- There is no new message from {{user}} right now. Let the group room continue naturally among the members as if they were chatting on their own.'
+        : triggerMode === 'direct-proactive'
+            ? '- {{user}} has not sent a new message. Start a natural first message to {{user}} from the responder.'
+            : '';
+    const latestMessageSection = triggerMode
+        ? '[Latest user message]\n(none - autonomous room activity)'
+        : `[Latest user message]\n${latestUserMessage || '(empty)'}`;
     const prompt = [
         `You are writing exactly one iPhone-style messenger room reply as ${responderName}.`,
         'This is a private mobile group room created by {{user}}.',
@@ -795,6 +887,7 @@ async function generateRoomReply(room, responderKey, candidateMap) {
         '- Stay strictly inside this room context. Do not turn it into the main 1:1 chat.',
         '- Keep it to 1-3 short natural chat lines with casual messenger rhythm.',
         '- Never imitate or merge with another member’s persona or tone.',
+        ambientPromptLine,
         '',
         '[Current responder]',
         responderName,
@@ -811,7 +904,7 @@ async function generateRoomReply(room, responderKey, candidateMap) {
         '[Recent room recap]',
         transcript || '(no prior room messages)',
         '',
-        `[Latest user message]\n${latestUserMessage || '(empty)'}`,
+        latestMessageSection,
         '',
         emoticonContext,
         '',
@@ -931,6 +1024,80 @@ async function runRoomAutoReplies(roomId, onUpdate = null) {
     };
     roomAutoReplyState.set(roomId, { token: scheduleToken, timerId: null, onUpdate });
     scheduleAttempt([]);
+}
+
+function ensureAmbientRoomSchedule(roomId, onUpdate = null) {
+    const room = getMessengerRoomById(roomId);
+    if (!room || room.settings?.ambientEnabled !== true) {
+        clearRoomAmbientSchedule(roomId);
+        return;
+    }
+    const intervalMs = clampRoomAmbientInterval(room.settings?.ambientIntervalSec, ROOM_DEFAULTS.ambientIntervalSec) * 1000;
+    const existingState = roomAmbientState.get(roomId);
+    if (existingState?.timerId) clearTimeout(existingState.timerId);
+    roomAmbientState.set(roomId, {
+        onUpdate: onUpdate || existingState?.onUpdate || null,
+        timerId: setTimeout(async () => {
+            const latestState = roomAmbientState.get(roomId);
+            const freshRoom = getMessengerRoomById(roomId);
+            if (!latestState || !freshRoom || freshRoom.settings?.ambientEnabled !== true) {
+                clearRoomAmbientSchedule(roomId);
+                return;
+            }
+            try {
+                if (!roomAutoReplyState.has(roomId)) {
+                    const probability = clampRoomPercentage(freshRoom.settings?.ambientProbability, ROOM_DEFAULTS.ambientProbability);
+                    if (Math.random() * 100 < probability) {
+                        const responders = freshRoom.members.filter(Boolean);
+                        const responderKey = responders[Math.floor(Math.random() * responders.length)];
+                        if (responderKey) {
+                            const candidateMap = getCandidateMap();
+                            const reply = await generateRoomReply(
+                                freshRoom,
+                                responderKey,
+                                candidateMap,
+                                { triggerMode: isGroupMessengerRoom(freshRoom) ? 'group-free-chat' : 'direct-proactive' },
+                            );
+                            if (reply?.text) {
+                                const nextRoom = appendRoomMessage(freshRoom, {
+                                    id: generateId(),
+                                    authorKey: responderKey,
+                                    authorName: getMemberDisplayLabel(responderKey, candidateMap),
+                                    text: reply.text,
+                                    html: reply.html || '',
+                                    timestamp: Date.now(),
+                                    type: 'message',
+                                });
+                                latestState.onUpdate?.(nextRoom);
+                                const roomTitle = getRoomTitle(nextRoom, candidateMap);
+                                const compactPreview = String(reply.text || '').replace(/\s+/g, ' ').trim();
+                                if (compactPreview) {
+                                    showToast(`${roomTitle} · ${isGroupMessengerRoom(nextRoom) ? '자유대화' : '선톡'} 알림`, 'info', 1800);
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('[ST-LifeSim] 메신저 방 백그라운드 대화 오류:', error);
+            } finally {
+                ensureAmbientRoomSchedule(roomId, latestState.onUpdate || null);
+            }
+        }, intervalMs),
+    });
+}
+
+function syncAmbientRoomSchedules() {
+    const activeRoomIds = new Set();
+    loadMessengerRooms().forEach((room) => {
+        if (room?.settings?.ambientEnabled === true) {
+            activeRoomIds.add(room.id);
+            ensureAmbientRoomSchedule(room.id);
+        }
+    });
+    [...roomAmbientState.keys()].forEach((roomId) => {
+        if (!activeRoomIds.has(roomId)) clearRoomAmbientSchedule(roomId);
+    });
 }
 
 function buildAvatarElement(memberKey, candidateMap) {
@@ -1377,6 +1544,27 @@ function openMessengerRoomDetail(roomId, onBack) {
 
     const actions = document.createElement('div');
     actions.className = 'slm-btn-row';
+    const contextBtn = document.createElement('button');
+    contextBtn.className = 'slm-btn slm-btn-ghost slm-btn-sm';
+    contextBtn.textContent = room.settings?.includeInContext ? '🙈 컨텍스트 제외' : '🙉 컨텍스트 포함';
+    contextBtn.onclick = () => {
+        const freshRoom = getMessengerRoomById(roomId);
+        if (!freshRoom) return;
+        const nextRoom = upsertMessengerRoom({
+            ...freshRoom,
+            settings: {
+                ...ROOM_DEFAULTS,
+                ...(freshRoom.settings || {}),
+                includeInContext: freshRoom.settings?.includeInContext !== true,
+            },
+        });
+        if (!nextRoom) return;
+        contextBtn.textContent = nextRoom.settings?.includeInContext ? '🙈 컨텍스트 제외' : '🙉 컨텍스트 포함';
+        showToast(nextRoom.settings?.includeInContext
+            ? (isMainCharInRoom(nextRoom) ? '이 방을 컨텍스트에 포함했습니다. {{char}}가 관련 내용을 언급할 수 있습니다.' : '이 방을 컨텍스트에 포함했습니다. {{char}}는 간접적으로만 언급합니다.')
+            : '이 방을 컨텍스트에서 제외했습니다.', 'success', 1700);
+    };
+    actions.appendChild(contextBtn);
     if (!isMainCharInRoom(room)) {
         const insightBtn = document.createElement('button');
         insightBtn.className = 'slm-btn slm-btn-secondary slm-btn-sm';
@@ -1425,6 +1613,49 @@ function openMessengerRoomDetail(roomId, onBack) {
     };
     actions.append(editBtn, deleteBtn);
     wrapper.appendChild(actions);
+
+    const automationCard = document.createElement('div');
+    automationCard.className = 'slm-room-meta-card';
+    const automationTitle = document.createElement('div');
+    automationTitle.className = 'slm-label';
+    const isGroupRoom = isGroupMessengerRoom(room);
+    automationTitle.textContent = isGroupRoom ? '자유대화 설정' : '선톡 설정';
+    const automationToggle = document.createElement('label');
+    automationToggle.className = 'slm-toggle-label';
+    const automationCheck = document.createElement('input');
+    automationCheck.type = 'checkbox';
+    automationCheck.checked = room.settings?.ambientEnabled === true;
+    automationToggle.appendChild(automationCheck);
+    automationToggle.appendChild(document.createTextNode(isGroupRoom ? ' 유저가 답하지 않아도 방 안에서 알아서 대화' : ' 유저가 답하지 않아도 이 방에서 먼저 연락'));
+    const automationRow = document.createElement('div');
+    automationRow.className = 'slm-input-row';
+    const intervalInput = document.createElement('input');
+    intervalInput.className = 'slm-input slm-input-sm';
+    intervalInput.type = 'number';
+    intervalInput.min = String(ROOM_AMBIENT_MIN_INTERVAL_SEC);
+    intervalInput.max = '3600';
+    intervalInput.value = String(clampRoomAmbientInterval(room.settings?.ambientIntervalSec, ROOM_DEFAULTS.ambientIntervalSec));
+    intervalInput.style.width = '84px';
+    const probabilityInput = document.createElement('input');
+    probabilityInput.className = 'slm-input slm-input-sm';
+    probabilityInput.type = 'number';
+    probabilityInput.min = '0';
+    probabilityInput.max = '100';
+    probabilityInput.value = String(clampRoomPercentage(room.settings?.ambientProbability, ROOM_DEFAULTS.ambientProbability));
+    probabilityInput.style.width = '72px';
+    automationRow.append(
+        Object.assign(document.createElement('span'), { className: 'slm-label', textContent: '간격(초)' }),
+        intervalInput,
+        Object.assign(document.createElement('span'), { className: 'slm-label', textContent: '확률(%)' }),
+        probabilityInput,
+    );
+    const automationDesc = document.createElement('div');
+    automationDesc.className = 'slm-desc';
+    automationDesc.textContent = isGroupRoom
+        ? '설정한 주기마다 확률적으로 그룹방이 저절로 굴러가는 것처럼 대화를 이어갑니다.'
+        : '설정한 주기마다 확률적으로 상대가 이 1:1 방에 먼저 말을 겁니다.';
+    automationCard.append(automationTitle, automationToggle, automationRow, automationDesc);
+    wrapper.appendChild(automationCard);
 
     const messageList = document.createElement('div');
     messageList.className = 'slm-room-message-list';
@@ -1593,6 +1824,31 @@ function openMessengerRoomDetail(roomId, onBack) {
         return nextRoom;
     };
 
+    const saveAutomationSettings = () => {
+        const freshRoom = getMessengerRoomById(roomId);
+        if (!freshRoom) return;
+        const nextRoom = upsertMessengerRoom({
+            ...freshRoom,
+            settings: {
+                ...ROOM_DEFAULTS,
+                ...(freshRoom.settings || {}),
+                ambientEnabled: automationCheck.checked,
+                ambientIntervalSec: clampRoomAmbientInterval(intervalInput.value, ROOM_DEFAULTS.ambientIntervalSec),
+                ambientProbability: clampRoomPercentage(probabilityInput.value, ROOM_DEFAULTS.ambientProbability),
+            },
+        });
+        if (!nextRoom) return;
+        intervalInput.value = String(nextRoom.settings?.ambientIntervalSec ?? ROOM_DEFAULTS.ambientIntervalSec);
+        probabilityInput.value = String(nextRoom.settings?.ambientProbability ?? ROOM_DEFAULTS.ambientProbability);
+        ensureAmbientRoomSchedule(roomId, () => {
+            if (messageList.isConnected) renderMessages();
+        });
+    };
+
+    automationCheck.onchange = saveAutomationSettings;
+    intervalInput.onchange = saveAutomationSettings;
+    probabilityInput.onchange = saveAutomationSettings;
+
     sendBtn.onclick = () => submitRoomMessage();
 
     quickSendBtn.onclick = () => submitRoomMessage({ skipAutoReply: true });
@@ -1615,6 +1871,9 @@ function openMessengerRoomDetail(roomId, onBack) {
 
     renderMessages();
     updateComposerState();
+    ensureAmbientRoomSchedule(roomId, () => {
+        if (messageList.isConnected) renderMessages();
+    });
     closePopup('messenger-rooms');
     createPopup({
         id: `messenger-room-${roomId}`,

@@ -350,16 +350,15 @@ export function buildImageApiPrompt(danbooruTags, appearanceTags, options) {
         ? appearanceTags.map(safeAppearanceGroup).filter(Boolean)
         : [safeAppearanceGroup(appearanceTags)].filter(Boolean);
 
-    // Format each appearance group as "[ Character N: tags ]"
+    // Format each appearance group as "Character N: tags"
     const wrappedAppearance = appearanceGroups.map(a => {
-        // Already in "Character N: tags" format from buildMatchedAppearanceGroups
         const colonIdx = a.indexOf(':');
         if (colonIdx > 0) {
             const label = a.substring(0, colonIdx).trim();
             const tags = a.substring(colonIdx + 1).trim();
-            return `[ ${label}: ${tags} ]`;
+            return `${label}: ${tags}`;
         }
-        return `[ ${a} ]`;
+        return a;
     });
 
     // Apply weight to scene tags if tagWeight > 0
@@ -368,10 +367,11 @@ export function buildImageApiPrompt(danbooruTags, appearanceTags, options) {
         : '';
 
     if (!wrappedScene && wrappedAppearance.length === 0) return '';
-    if (!wrappedScene) return wrappedAppearance.join(', ');
-    if (wrappedAppearance.length === 0) return wrappedScene;
-
-    return `${wrappedScene}, ${wrappedAppearance.join(', ')}`;
+    const promptParts = [wrappedScene, ...wrappedAppearance]
+        .map((part) => String(part || '').trim())
+        .filter(Boolean);
+    if (promptParts.length === 0) return '';
+    return `"${promptParts.join(' | ').replace(/"/g, '\'')}"`;
 }
 
 function buildMatchedAppearanceGroups(matched = []) {
@@ -477,6 +477,35 @@ function resolveImagePromptContext(rawPrompt, options = {}) {
     return { resolvedRawPrompt, matched, tagWeight };
 }
 
+function trimOuterSquareBrackets(text) {
+    const trimmed = String(text || '').trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        return trimmed.slice(1, -1).trim();
+    }
+    return trimmed;
+}
+
+function parsePipePromptFormat(text) {
+    const normalized = String(text || '')
+        .replace(/[\r\n]+/g, ' ')
+        .trim()
+        .replace(/^[`"'“”‘’]+|[`"'“”‘’]+$/g, '')
+        .trim();
+    if (!normalized.includes('|')) return null;
+    const parts = normalized
+        .split('|')
+        .map((part) => part.trim())
+        .filter(Boolean);
+    if (parts.length < 2) return null;
+    const [sceneTags, ...appearanceParts] = parts;
+    const appearanceGroups = dedupeAppearanceGroups(appearanceParts.map((part) => trimOuterSquareBrackets(part)));
+    if (!sceneTags && appearanceGroups.length === 0) return null;
+    return {
+        sceneTags: sanitizeTags(sceneTags),
+        appearanceGroups,
+    };
+}
+
 /**
  * Build a final image prompt directly from an already-generated prompt string.
  * This is used when the answer/SNS API itself already outputs the image tags,
@@ -493,29 +522,32 @@ export function buildDirectImagePrompt(rawPrompt, options = {}) {
     }
 
     const { resolvedRawPrompt, matched, tagWeight } = resolveImagePromptContext(rawPrompt, options);
-    const directPrompt = sanitizeTags(
-        String(resolvedRawPrompt || '')
-            .replace(/[\r\n]+/g, ', ')
-            .trim(),
-    );
+    const normalizedPrompt = String(resolvedRawPrompt || '')
+        .replace(/[\r\n]+/g, ' ')
+        .trim();
+    const pipePrompt = parsePipePromptFormat(normalizedPrompt);
+    const directPrompt = sanitizeTags(normalizedPrompt);
     // Match both bracket format [Name: tags] and parenthetical format Character N: (tags)
     const appearanceBlockRegex = /\[[^\]]+:[^\]]+\]/g;
     const pipeCharBlockRegex = /Character\s+\d+:\s*\([^)]+\)/gi;
     const promptAppearanceBlocks = directPrompt.match(appearanceBlockRegex) || [];
     const promptPipeBlocks = directPrompt.match(pipeCharBlockRegex) || [];
     const allPromptBlocks = [
+        ...(pipePrompt?.appearanceGroups || []),
         ...promptAppearanceBlocks.map(b => b.slice(1, -1).trim()),
         ...promptPipeBlocks.map(b => b.replace(/\(([^)]+)\)/, '$1').trim()),
     ].filter(Boolean);
     const uniquePromptBlocks = dedupeAppearanceGroups(allPromptBlocks);
-    const sceneOnly = directPrompt
-        .replace(appearanceBlockRegex, '')
-        .replace(pipeCharBlockRegex, '')
-        .replace(/\|/g, ',')
-        .split(',')
-        .map(s => s.trim().replace(/^[`"'‘’“”]+|[`"'‘’“”]+$/g, '').replace(/[.!?]+$/g, ''))
-        .filter(Boolean)
-        .join(', ');
+    const sceneOnly = pipePrompt
+        ? pipePrompt.sceneTags
+        : directPrompt
+            .replace(appearanceBlockRegex, '')
+            .replace(pipeCharBlockRegex, '')
+            .replace(/\|/g, ',')
+            .split(',')
+            .map(s => s.trim().replace(/^[`"'‘’“”]+|[`"'‘’“”]+$/g, '').replace(/[.!?]+$/g, ''))
+            .filter(Boolean)
+            .join(', ');
     const matchedAppearanceGroups = buildMatchedAppearanceGroups(matched);
     const appearanceGroups = matchedAppearanceGroups.length > 0
         ? matchedAppearanceGroups
@@ -592,21 +624,25 @@ export async function generateImageTags(rawPrompt, options = {}) {
     // The AI may include [Name: appearance] blocks or Character N: (tags) pipe blocks.
     const appearanceBlockRegex = /\[[^\]]+:[^\]]+\]/g;
     const pipeCharBlockRegex = /Character\s+\d+:\s*\([^)]+\)/gi;
+    const pipePrompt = parsePipePromptFormat(sceneTags);
     const aiAppearanceBlocks = sceneTags.match(appearanceBlockRegex) || [];
     const aiPipeBlocks = sceneTags.match(pipeCharBlockRegex) || [];
     const allAiBlocks = [
+        ...(pipePrompt?.appearanceGroups || []),
         ...aiAppearanceBlocks.map(b => b.slice(1, -1).trim()),
         ...aiPipeBlocks.map(b => b.replace(/\(([^)]+)\)/, '$1').trim()),
     ].filter(Boolean);
     const uniqueAiBlocks = dedupeAppearanceGroups(allAiBlocks);
-    const sceneOnly = sceneTags
-        .replace(appearanceBlockRegex, '')  // Remove [Name: appearance] blocks
-        .replace(pipeCharBlockRegex, '')    // Remove Character N: (tags) blocks
-        .replace(/\|/g, ',')               // 파이프를 쉼표로 변환
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean)
-        .join(', ');
+    const sceneOnly = pipePrompt
+        ? pipePrompt.sceneTags
+        : sceneTags
+            .replace(appearanceBlockRegex, '')  // Remove [Name: appearance] blocks
+            .replace(pipeCharBlockRegex, '')    // Remove Character N: (tags) blocks
+            .replace(/\|/g, ',')               // 파이프를 쉼표로 변환
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean)
+            .join(', ');
 
     // ── Step 3: Collect appearance tag groups ──
     // Prefer AI-selected appearance blocks; fall back to all matched characters
@@ -652,7 +688,6 @@ function sanitizeTags(raw) {
     // Remove common AI preamble / markdown fences (keep fenced content)
     cleaned = cleaned
         .replace(/```[a-zA-Z0-9_-]*\s*\n?/g, '')
-        .replace(/\|/g, ',')               // 파이프를 쉼표로 변환
         .replace(/^[^a-zA-Z0-9_(\[]*/, '')
         .trim();
 

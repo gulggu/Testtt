@@ -133,12 +133,26 @@ function saveImagePresets(presets) {
     saveData(IMAGE_PRESETS_KEY, presets, SNS_PRESET_BINDING);
 }
 
+function loadCharacterBoundMap(key, fallback = {}) {
+    const current = loadData(key, null, SNS_PRESET_BINDING);
+    if (current && typeof current === 'object' && !Array.isArray(current)) return current;
+    const legacy = loadData(key, fallback, getDefaultBinding());
+    if (legacy && typeof legacy === 'object' && !Array.isArray(legacy) && Object.keys(legacy).length > 0 && getDefaultBinding() !== SNS_PRESET_BINDING) {
+        saveData(key, legacy, SNS_PRESET_BINDING);
+    }
+    return legacy && typeof legacy === 'object' && !Array.isArray(legacy) ? legacy : { ...fallback };
+}
+
+function saveCharacterBoundMap(key, map) {
+    saveData(key, map, SNS_PRESET_BINDING);
+}
+
 function loadPostingEnabledMap() {
-    return loadData(POSTING_ENABLED_KEY, {}, getDefaultBinding());
+    return loadCharacterBoundMap(POSTING_ENABLED_KEY, {});
 }
 
 function savePostingEnabledMap(map) {
-    saveData(POSTING_ENABLED_KEY, map, getDefaultBinding());
+    saveCharacterBoundMap(POSTING_ENABLED_KEY, map);
 }
 
 function loadAuthorMinLikesMap() {
@@ -326,7 +340,7 @@ function enforceSnsLanguage(prompt, language) {
  * @returns {Object}
  */
 function loadUserIds() {
-    return loadData(USER_IDS_KEY, {}, getDefaultBinding());
+    return loadCharacterBoundMap(USER_IDS_KEY, {});
 }
 
 /**
@@ -334,7 +348,7 @@ function loadUserIds() {
  * @param {Object} ids
  */
 function saveUserIds(ids) {
-    saveData(USER_IDS_KEY, ids, getDefaultBinding());
+    saveCharacterBoundMap(USER_IDS_KEY, ids);
 }
 
 function makeDefaultHandle(name) {
@@ -358,7 +372,14 @@ function getAuthorHandle(authorName, userIds = loadUserIds()) {
  * @returns {boolean}
  */
 function loadContactLink() {
-    const val = loadData(CONTACT_LINK_KEY, true, getDefaultBinding());
+    const val = loadData(CONTACT_LINK_KEY, null, SNS_PRESET_BINDING);
+    if (val == null) {
+        const legacy = loadData(CONTACT_LINK_KEY, true, getDefaultBinding());
+        if (legacy !== true && getDefaultBinding() !== SNS_PRESET_BINDING) {
+            saveData(CONTACT_LINK_KEY, legacy, SNS_PRESET_BINDING);
+        }
+        return legacy !== false;
+    }
     return val !== false;
 }
 
@@ -367,23 +388,23 @@ function loadContactLink() {
  * @param {boolean} val
  */
 function saveContactLink(val) {
-    saveData(CONTACT_LINK_KEY, val, getDefaultBinding());
+    saveData(CONTACT_LINK_KEY, val, SNS_PRESET_BINDING);
 }
 
 function loadAuthorDefaultImages() {
-    return loadData(AUTHOR_DEFAULT_IMAGE_KEY, {}, getDefaultBinding());
+    return loadCharacterBoundMap(AUTHOR_DEFAULT_IMAGE_KEY, {});
 }
 
 function saveAuthorDefaultImages(map) {
-    saveData(AUTHOR_DEFAULT_IMAGE_KEY, map, getDefaultBinding());
+    saveCharacterBoundMap(AUTHOR_DEFAULT_IMAGE_KEY, map);
 }
 
 function loadAuthorLanguages() {
-    return loadData(AUTHOR_LANGUAGE_KEY, {}, getDefaultBinding());
+    return loadCharacterBoundMap(AUTHOR_LANGUAGE_KEY, {});
 }
 
 function saveAuthorLanguages(map) {
-    saveData(AUTHOR_LANGUAGE_KEY, map, getDefaultBinding());
+    saveCharacterBoundMap(AUTHOR_LANGUAGE_KEY, map);
 }
 
 function getAuthorLanguage(authorName, fallbackLanguage) {
@@ -569,7 +590,7 @@ function saveFeed(feed) {
  * @returns {Object} { [authorName]: avatarUrl }
  */
 function loadAvatars() {
-    return loadData(AVATARS_KEY, {}, getDefaultBinding());
+    return loadCharacterBoundMap(AVATARS_KEY, {});
 }
 
 /**
@@ -577,15 +598,15 @@ function loadAvatars() {
  * @param {Object} avatars
  */
 function saveAvatars(avatars) {
-    saveData(AVATARS_KEY, avatars, getDefaultBinding());
+    saveCharacterBoundMap(AVATARS_KEY, avatars);
 }
 
 function loadAvatarStyles() {
-    return loadData(AVATAR_STYLES_KEY, {}, getDefaultBinding());
+    return loadCharacterBoundMap(AVATAR_STYLES_KEY, {});
 }
 
 function saveAvatarStyles(styles) {
-    saveData(AVATAR_STYLES_KEY, styles, getDefaultBinding());
+    saveCharacterBoundMap(AVATAR_STYLES_KEY, styles);
 }
 
 function getAvatarStyle(authorName, avatarStyles, defaults) {
