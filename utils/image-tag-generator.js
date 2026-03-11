@@ -8,7 +8,7 @@
  *  - 태그 생성 단계가 반드시 선행
  *  - 태그는 영어 Danbooru 형식
  *  - 모든 이미지 생성 경로(메신저/SNS/유저)가 동일한 파이프라인을 사용
- *  - 최종 프롬프트 형식: scene tags, [ Character 1: (appearance1) ], [ Character 2: (appearance2) ]
+ *  - 최종 프롬프트 형식: scene tags, [ Character 1: appearance1 ], [ Character 2: appearance2 ]
  */
 
 import { getContext } from './st-context.js';
@@ -104,7 +104,7 @@ function buildCharacterAwarePrompt(characters, appearanceVarMap, additionalPromp
         'OUTPUT FORMAT:',
         '1) Reasoning block in <img-gen>...</img-gen> tags (which characters to include and why).',
         '2) After </img-gen>, on a NEW line, the final prompt in this EXACT format:',
-        '   scene tags, [ Character 1: (appearance tags) ], [ Character 2: (appearance tags) ]',
+        '   scene tags, [ Character 1: appearance tags ], [ Character 2: appearance tags ]',
         '   Use comma-separated scene tags, then wrap each character block in square brackets.',
         '   Use "Character N:" labels, NOT actual character names.',
         '',
@@ -129,7 +129,7 @@ function buildCharacterAwarePrompt(characters, appearanceVarMap, additionalPromp
         '17) If three or more characters appear, include the group shot tag.',
         '18) Never replace explicit count tags with generic people-count tags.',
         '19) Preserve any weighted tags or special syntax such as 2::tag::, -2::tag::, or 3::tag:: exactly as provided.',
-        '20) Always keep the final character appearance blocks in [ Character N: (...) ] format.',
+        '20) Always keep the final character appearance blocks in [ Character N: appearance tags ] format.',
         '',
         'EXAMPLE:',
         '* Input: "Alice and Bob go to cafe"',
@@ -140,7 +140,7 @@ function buildCharacterAwarePrompt(characters, appearanceVarMap, additionalPromp
         'Character 1 (Alice) and Character 2 (Bob) both appear. Cafe scene.',
         '</img-gen>',
         '',
-        '1girl, 1boy, cafe, sitting, table, indoor, warm lighting, upper body, [ Character 1: (long hair, blue eyes) ], [ Character 2: (short hair, brown eyes) ]',
+        '1girl, 1boy, cafe, sitting, table, indoor, warm lighting, upper body, [ Character 1: long hair, blue eyes ], [ Character 2: short hair, brown eyes ]',
         '',
         'Known characters:',
         charList,
@@ -334,7 +334,7 @@ export async function generateDanbooruTags(rawPrompt, options) {
 /**
  * Build the final Image API prompt by combining Danbooru tags with appearance tags.
  * Korean text is never included.
- * Format: scene tags, [ Character 1: (appearance1) ], [ Character 2: (appearance2) ]
+ * Format: scene tags, [ Character 1: appearance1 ], [ Character 2: appearance2 ]
  *
  * @param {string} danbooruTags - Generated English Danbooru tags
  * @param {string|string[]} appearanceTags - Character appearance groups (already formatted as "Character N: tags")
@@ -350,14 +350,14 @@ export function buildImageApiPrompt(danbooruTags, appearanceTags, options) {
         ? appearanceTags.map(safeAppearanceGroup).filter(Boolean)
         : [safeAppearanceGroup(appearanceTags)].filter(Boolean);
 
-    // Format each appearance group as "[ Character N: (tags) ]"
+    // Format each appearance group as "[ Character N: tags ]"
     const wrappedAppearance = appearanceGroups.map(a => {
         // Already in "Character N: tags" format from buildMatchedAppearanceGroups
         const colonIdx = a.indexOf(':');
         if (colonIdx > 0) {
             const label = a.substring(0, colonIdx).trim();
             const tags = a.substring(colonIdx + 1).trim();
-            return `[ ${label}: (${tags}) ]`;
+            return `[ ${label}: ${tags} ]`;
         }
         return `[ ${a} ]`;
     });
@@ -534,7 +534,7 @@ export function buildDirectImagePrompt(rawPrompt, options = {}) {
  *  1. Load all contacts (names, descriptions, appearance tags)
  *  2. Match characters mentioned in the input prompt (name/displayName/subName)
  *  3. Generate scene tags + character selection via AI (with <img-gen> reasoning)
- *  4. Combine: scene tags, [ Character 1: (appearance1) ], [ Character 2: (appearance2) ]
+ *  4. Combine: scene tags, [ Character 1: appearance1 ], [ Character 2: appearance2 ]
  *
  * The AI decides which characters should appear based on context.
  * Only the content after </img-gen> is sent to the image generation API.
@@ -617,7 +617,7 @@ export async function generateImageTags(rawPrompt, options = {}) {
     }
 
     // ── Step 4: Build final prompt ──
-    // Result: "scene tags, [ Character 1: (appearance1) ], [ Character 2: (appearance2) ]"
+    // Result: "scene tags, [ Character 1: appearance1 ], [ Character 2: appearance2 ]"
     const filteredSceneTags = stripAppearanceTagsFromScene(sceneOnly, appearanceGroups);
     const finalPrompt = buildImageApiPrompt(filteredSceneTags, appearanceGroups, { tagWeight });
 

@@ -256,7 +256,7 @@ function buildSnsDirectImagePromptRequest(sourcePrompt, authorName) {
         `Return exactly one final direct image prompt for the author.`,
         'Output ONLY one line of English Danbooru-style tags for direct image generation.',
         'Do NOT write prose, captions, narration, or sentence-style descriptions.',
-        'Format: scene tags, [ Character 1: (appearance tags) ]',
+        'Format: scene tags, [ Character 1: appearance tags ]',
         'Keep the scene tags comma-separated, then wrap each character appearance block in square brackets.',
         'Use "Character N:" labels, NOT actual character names.',
         DANBOORU_SPACE_TAG_RULE,
