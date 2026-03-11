@@ -258,7 +258,7 @@ export function replaceAiSelectedEmoticons(text, senderName = '{{char}}') {
     const resolveToken = (rawName) => {
         const normalizedSource = normalizeEmoticonName(rawName);
         if (!isSafeEmoticonTokenName(normalizedSource)) return null;
-        const numberedName = normalizedSource.replace(/^\d+\s*[\].)\-:]\s*/, '').trim();
+        const numberedName = normalizedSource.replace(/^\d+\s*[\].)\-:]+\s*/, '').trim();
         const normalizedName = normalizeEmoticonName(numberedName || normalizedSource).toLowerCase();
         return htmlMap.get(normalizedName) || null;
     };
@@ -400,6 +400,7 @@ export function buildEmoticonPickerContent(options = {}) {
         const nextQuery = searchInput.value.toLowerCase();
         clearTimeout(searchDebounceId);
         searchDebounceId = setTimeout(() => {
+            if (!searchInput.isConnected) return;
             searchQuery = nextQuery;
             renderGrid();
         }, EMOTICON_SEARCH_DEBOUNCE_MS);
