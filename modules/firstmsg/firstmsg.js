@@ -6,7 +6,8 @@
  */
 
 import { getContext } from '../../utils/st-context.js';
-import { slashGen } from '../../utils/slash.js';
+import { slashSendAs } from '../../utils/slash.js';
+import { generateBackendText } from '../../utils/backend-generation.js';
 
 // 최소 허용 간격 (초)
 const MIN_INTERVAL_SEC = 5;
@@ -37,7 +38,16 @@ export function startFirstMsgTimer(fmSettings) {
             if (charName) {
                 firstMsgInFlight = true;
                 try {
-                    await slashGen(FIRST_MSG_PROMPT(charName), charName);
+                    const generated = await generateBackendText({
+                        ctx,
+                        prompt: FIRST_MSG_PROMPT(charName),
+                        quietName: charName,
+                    });
+                    if (generated) {
+                        await slashSendAs(charName, generated);
+                    } else {
+                        console.warn('[ST-LifeSim] 선톡 생성 결과가 비어 전송을 건너뜁니다:', charName);
+                    }
                 } catch (e) {
                     console.error('[ST-LifeSim] 선톡 오류:', e);
                 } finally {

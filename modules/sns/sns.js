@@ -16,8 +16,7 @@ import { createPopup } from '../../utils/popup.js';
 import { getContacts, getAppearanceTagsByName } from '../contacts/contacts.js';
 import { buildDirectImagePrompt } from '../../utils/image-tag-generator.js';
 import { applyProfileImageStyle, normalizeProfileImageStyle, readImageFileAsDataUrl } from '../../utils/profile-image.js';
-import { slashGenQuiet } from '../../utils/slash.js';
-import { isHtmlTextResponse } from '../../utils/text-response.js';
+import { generateBackendText } from '../../utils/backend-generation.js';
 
 const MODULE_KEY = 'sns-feed';
 const AVATARS_KEY = 'sns-avatars';
@@ -43,32 +42,6 @@ const DEFAULT_SNS_PROMPTS = {
     extraComment: 'Write exactly one additional SNS comment for this post.\nPost author: {{postAuthorName}} ({{postAuthorHandle}})\nPost: "{{postContent}}"\nComment author: {{extraAuthorName}} ({{extraAuthorHandle}})\nRules: one short sentence from {{extraAuthorName}}\'s perspective; use only fixed @handles if needed; use natural language fitting {{extraAuthorName}}\'s background; no explanations, quotes, or hashtags. Personality hint: {{extraPersonality}}. It should be written vividly, fitting the characteristics of each character.',
 };
 const SNS_PRESET_BINDING = 'character';
-const MODEL_KEY_BY_SOURCE = {
-    openai: 'openai_model',
-    claude: 'claude_model',
-    makersuite: 'google_model',
-    vertexai: 'vertexai_model',
-    openrouter: 'openrouter_model',
-    ai21: 'ai21_model',
-    mistralai: 'mistralai_model',
-    cohere: 'cohere_model',
-    perplexity: 'perplexity_model',
-    groq: 'groq_model',
-    chutes: 'chutes_model',
-    siliconflow: 'siliconflow_model',
-    electronhub: 'electronhub_model',
-    nanogpt: 'nanogpt_model',
-    deepseek: 'deepseek_model',
-    aimlapi: 'aimlapi_model',
-    xai: 'xai_model',
-    pollinations: 'pollinations_model',
-    cometapi: 'cometapi_model',
-    moonshot: 'moonshot_model',
-    fireworks: 'fireworks_model',
-    azure_openai: 'azure_openai_model',
-    custom: 'custom_model',
-    zai: 'zai_model',
-};
 // 댓글 직후 즉시 생성하지 않고, 유저 메시지 이벤트에서 확률적으로 하나씩 처리하는 큐다.
 const PENDING_COMMENT_REACTIONS = [];
 let pendingReactionInFlight = false;
@@ -215,10 +188,6 @@ function getSnsAiRouteSettings(routeKey = 'sns') {
     };
 }
 
-function inferModelSettingKey(source) {
-    return MODEL_KEY_BY_SOURCE[String(source || '').toLowerCase()] || '';
-}
-
 function applyPromptTemplate(template, vars) {
     return String(template || '').replace(/\{\{(\w+)}}/g, (_, key) => String(vars?.[key] ?? ''));
 }
@@ -303,13 +272,26 @@ async function createSnsImagePrompt(ctx, sourcePrompt, authorName, contacts = []
     return { sceneTags: '', appearanceGroups: [], finalPrompt: '' };
 }
 
-async function applyGeneratedImageToPost(postId, { promptSource, authorName, fallbackImageUrl = '', onUpdate } = {}) {
+async function applyGeneratedImageToPost(postId, {
+    promptSource,
+    authorName,
+    fallbackImageUrl = '',
+    onUpdate,
+    reusePromptOnly = false,
+} = {}) {
     const ctx = getContext();
     if (!ctx) return false;
-    const contacts = [...getContacts('character'), ...getContacts('chat')];
-    const promptResult = await createSnsImagePrompt(ctx, promptSource, authorName, contacts);
-    if (!promptResult.finalPrompt) return false;
-    const generatedUrl = await generateImageViaApi(promptResult.finalPrompt);
+    let finalPrompt = String(promptSource || '').trim();
+    if (!reusePromptOnly) {
+        finalPrompt = (await createSnsImagePrompt(
+            ctx,
+            promptSource,
+            authorName,
+            [...getContacts('character'), ...getContacts('chat')],
+        )).finalPrompt;
+    }
+    if (!finalPrompt) return false;
+    const generatedUrl = await generateImageViaApi(finalPrompt);
     const feed = loadFeed();
     const post = feed.find(item => item.id === postId);
     if (!post) return false;
@@ -319,7 +301,7 @@ async function applyGeneratedImageToPost(postId, { promptSource, authorName, fal
     } else if (!post.imageUrl && fallbackImageUrl) {
         post.imageUrl = fallbackImageUrl;
     }
-    post.imagePrompt = promptResult.finalPrompt;
+    post.imagePrompt = finalPrompt;
     saveFeed(feed);
     _activeFeedRenderer?.();
     onUpdate?.();
@@ -1108,6 +1090,7 @@ function showPostContextMenu(e, post, onUpdate) {
             authorName: post.authorName,
             fallbackImageUrl: getAuthorDefaultImageUrl(post.authorName) || '',
             onUpdate,
+            reusePromptOnly: true,
         }).then((ok) => {
             if (ok) showToast('이미지 재생성 완료', 'success', 1800);
             else showToast('이미지 재생성 실패', 'warn', 1800);
@@ -1441,81 +1424,12 @@ function findCommentNodeById(nodes, id) {
 
 async function generateSnsText(ctx, quietPrompt, quietName, routeKey = 'sns') {
     if (!ctx) return '';
-    const slashResult = await slashGenQuiet(quietPrompt);
-    if (slashResult) return slashResult.trim();
-    const promptSettings = getSnsPromptSettings();
-    if (promptSettings.externalApiUrl) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), promptSettings.externalApiTimeoutMs);
-        try {
-            const headers = { 'Content-Type': 'application/json' };
-            if (typeof ctx.getRequestHeaders === 'function') {
-                Object.assign(headers, ctx.getRequestHeaders());
-            }
-            const response = await fetch(promptSettings.externalApiUrl, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({ prompt: quietPrompt, quietName, module: 'st-lifesim-sns' }),
-                signal: controller.signal,
-            });
-            if (response.ok) {
-                const rawText = await response.text();
-                const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
-                if (isHtmlTextResponse(rawText, contentType)) {
-                    console.warn('[ST-LifeSim] SNS 외부 API가 HTML 응답을 반환하여 무시합니다.');
-                } else {
-                    try {
-                        const json = JSON.parse(rawText || 'null');
-                        if (typeof json === 'string') return json.trim();
-                        if (typeof json?.text === 'string') return json.text.trim();
-                    } catch { /* non-JSON 응답은 그대로 사용 */ }
-                    if (rawText) return rawText.trim();
-                }
-            } else {
-                console.warn('[ST-LifeSim] SNS 외부 API 응답 오류:', response.status);
-            }
-        } catch (error) {
-            console.warn('[ST-LifeSim] SNS 외부 API 호출 실패, 내부 생성으로 폴백:', error);
-        } finally {
-            clearTimeout(timer);
-        }
-    }
-    if (typeof ctx.generateRaw === 'function') {
-        const aiRoute = getSnsAiRouteSettings(routeKey);
-        const chatSettings = ctx.chatCompletionSettings;
-        const sourceBefore = chatSettings?.chat_completion_source;
-        let modelKey = '';
-        let modelBefore;
-        if (chatSettings && aiRoute.chatSource) {
-            chatSettings.chat_completion_source = aiRoute.chatSource;
-        }
-        if (chatSettings) {
-            modelKey = aiRoute.modelSettingKey || inferModelSettingKey(aiRoute.chatSource || sourceBefore);
-            if (modelKey && typeof aiRoute.model === 'string' && aiRoute.model.length > 0) {
-                modelBefore = chatSettings[modelKey];
-                chatSettings[modelKey] = aiRoute.model;
-            }
-        }
-        try {
-            return (await ctx.generateRaw({
-                prompt: quietPrompt,
-                quietToLoud: false,
-                trimNames: true,
-                api: aiRoute.api || null,
-            }) || '').trim();
-        } finally {
-            if (chatSettings && aiRoute.chatSource) {
-                chatSettings.chat_completion_source = sourceBefore;
-            }
-            if (chatSettings && modelKey && typeof aiRoute.model === 'string' && aiRoute.model.length > 0) {
-                chatSettings[modelKey] = modelBefore;
-            }
-        }
-    }
-    if (typeof ctx.generateQuietPrompt === 'function') {
-        return (await ctx.generateQuietPrompt({ quietPrompt, quietName }) || '').trim();
-    }
-    return '';
+    return await generateBackendText({
+        ctx,
+        prompt: quietPrompt,
+        quietName,
+        route: getSnsAiRouteSettings(routeKey),
+    });
 }
 
 async function runDeferredCommentGeneration({ postId, commentId, text, userName, onUpdate }) {
