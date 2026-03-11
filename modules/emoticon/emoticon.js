@@ -81,6 +81,10 @@ function loadEmoticons() {
     return normalizedLegacy;
 }
 
+export function getStoredEmoticons() {
+    return loadEmoticons();
+}
+
 /**
  * 이모티콘 목록을 저장한다
  * @param {Emoticon[]} emoticons
@@ -185,6 +189,10 @@ function buildEmoticonHtml(emoticon, senderName) {
     const safeSenderName = escapeHtml(senderName || '{{char}}');
     const label = `${safeSenderName}이(가) ${safeName} 이모티콘을 보냈습니다.`;
     return `<img src="${safeUrl}" alt="${safeName}" aria-label="${label}" style="width:${size}px;height:${size}px;object-fit:contain;display:inline-block;vertical-align:middle;border-radius:${radius}px">`;
+}
+
+export function buildEmoticonMessageHtml(emoticon, senderName = getCurrentCharName() || '{{char}}') {
+    return buildEmoticonHtml(emoticon, senderName);
 }
 
 function normalizeEmoticonName(value) {

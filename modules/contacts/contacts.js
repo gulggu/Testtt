@@ -18,7 +18,7 @@ import { getAllEmoticonCategories } from '../emoticon/emoticon.js';
 
 const MODULE_KEY = 'contacts';
 const MAX_AI_CONTACT_KEYWORD_LENGTH = 200;
-const MAX_CONTACT_DESCRIPTION_LENGTH = 5000;
+const MAX_CONTACT_DESCRIPTION_LENGTH = 20000;
 const LEGACY_CONTACT_ID_FIELDS = ['name', 'displayName', 'subName'];
 const MODEL_KEY_BY_SOURCE = {
     openai: 'openai_model',
@@ -657,7 +657,7 @@ function openContactDialog(existing, defaultBinding, onSave) {
     const fields = {
         name: createFormField(wrapper, existing?.isCharAuto ? '표시 이름 *' : (existing?.isUserAuto ? '표시 이름' : '이름 *'), 'text', existing?.displayName || existing?.name || ''),
         subName: createFormField(wrapper, '🌐 다른 언어 이름', 'text', existing?.subName || ''),
-        avatar: createFormField(wrapper, '프로필 이미지 URL', 'url', existing?.avatar || ''),
+        avatar: createFormField(wrapper, '프로필 이미지', 'hidden', existing?.avatar || ''),
         description: createFormField(wrapper, '설명', 'text', existing?.description || ''),
         relationToUser: createFormField(wrapper, '{{user}}와의 관계 *', 'text', existing?.relationToUser || ''),
         relationToChar: createFormField(wrapper, '{{char}}와의 관계', 'text', existing?.relationToChar || ''),
@@ -751,6 +751,10 @@ function openContactDialog(existing, defaultBinding, onSave) {
     avatarClearBtn.textContent = '🧹 이미지 비우기';
     avatarActionRow.append(avatarUploadBtn, avatarClearBtn, avatarUploadInput);
     fields.avatar.insertAdjacentElement('afterend', avatarActionRow);
+    const avatarFieldNote = document.createElement('div');
+    avatarFieldNote.className = 'slm-desc';
+    avatarFieldNote.textContent = '프로필 이미지는 로컬 업로드만 지원합니다.';
+    avatarActionRow.insertAdjacentElement('afterend', avatarFieldNote);
 
     const avatarPreviewLabel = Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '아바타 미리보기 / 크롭 설정' });
     const avatarPreview = document.createElement('div');
@@ -765,7 +769,7 @@ function openContactDialog(existing, defaultBinding, onSave) {
         className: 'slm-input',
         type: 'range',
         min: '100',
-        max: '250',
+        max: '400',
         step: '1',
         value: String(initialAvatarStyle.scale),
     });
@@ -801,7 +805,6 @@ function openContactDialog(existing, defaultBinding, onSave) {
     avatarPreview.insertAdjacentElement('afterend', avatarCropRow);
     fields.subName.placeholder = '예: 유레오, ユレオ (이미지 생성 시 이 이름도 인식됩니다)';
     fields.appearanceTags.placeholder = '예: long hair, school uniform, warm smile';
-    fields.avatar.placeholder = 'https://... 또는 업로드한 이미지';
 
     const getDraftAvatarStyle = () => normalizeProfileImageStyle({
         scale: avatarScaleInput.value,

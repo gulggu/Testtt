@@ -63,6 +63,8 @@ const GROUP_CHAT_CONTEXT_BOUNDARY_NOTE = 'This group room is a separate messenge
 const GROUP_CHAT_PREVIEW_USER_TEXT = '{{user}}: 오늘 다같이 어디서 볼까?';
 const GROUP_CHAT_PREVIEW_NPC_TEXT = '민지: 나는 내 성격/말투대로만 답하고, 다른 참가자처럼 말하지 않아.';
 const GROUP_CHAT_DESCRIPTION_TEXT = '단톡 응답은 별도 메신저 방 컨텍스트로 취급되며, 응답자는 자신의 프로필/관계/말투만 유지하도록 강하게 고정됩니다.';
+const GROUP_CHAT_REPLY_DELAY_MIN_MS = 2500;
+const GROUP_CHAT_REPLY_DELAY_MAX_MS = 6500;
 const ROUTE_MODEL_KEY_BY_SOURCE = {
     openai: 'openai_model',
     claude: 'claude_model',
@@ -1251,7 +1253,7 @@ async function enrichGroupChatReplyContent(text, senderName, transcript) {
     imagePlaceholders.forEach((imageHtml, placeholder) => {
         richHtml = richHtml.replace(new RegExp(placeholder, 'g'), imageHtml);
     });
-    return richHtml;
+    return wrapRichMessageHtml(richHtml);
 }
 
 async function generateGroupChatReply(responder, roster) {
@@ -1394,6 +1396,32 @@ function planGroupChatTurn() {
 
 let pendingGroupChatTurn = null;
 let isGroupChatExecutionInFlight = false;
+let pendingGroupChatTimeoutId = null;
+
+function clearScheduledGroupChatTurn() {
+    if (pendingGroupChatTimeoutId) {
+        clearTimeout(pendingGroupChatTimeoutId);
+        pendingGroupChatTimeoutId = null;
+    }
+}
+
+function schedulePlannedGroupChatTurn(plan) {
+    clearScheduledGroupChatTurn();
+    if (!plan) return;
+    const delay = GROUP_CHAT_REPLY_DELAY_MIN_MS + Math.floor(Math.random() * (GROUP_CHAT_REPLY_DELAY_MAX_MS - GROUP_CHAT_REPLY_DELAY_MIN_MS + 1));
+    pendingGroupChatTimeoutId = setTimeout(async () => {
+        pendingGroupChatTimeoutId = null;
+        if (isGroupChatExecutionInFlight) return;
+        isGroupChatExecutionInFlight = true;
+        try {
+            await executePlannedGroupChatTurn(plan);
+        } catch (error) {
+            console.error('[ST-LifeSim] 단톡 자동 응답 오류:', error);
+        } finally {
+            isGroupChatExecutionInFlight = false;
+        }
+    }, delay);
+}
 
 async function executePlannedGroupChatTurn(plan) {
     if (!plan?.responders?.length) return;
@@ -3723,6 +3751,14 @@ function waitForDelay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function wrapRichMessageHtml(html) {
+    const source = String(html || '');
+    if (!source.trim()) return source;
+    if (/^<div class="slm-message-rich-content">/i.test(source.trim())) return source;
+    if (!/(?:<img\b|<br\b|slm-msg-generated-image|aria-label=)/i.test(source)) return source;
+    return `<div class="slm-message-rich-content">${source}</div>`;
+}
+
 async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
     if (!Number.isFinite(msgIdx) || msgIdx < 0) return false;
     const selectors = [
@@ -3736,7 +3772,7 @@ async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
                 .map(selector => document.querySelector(selector))
                 .find(Boolean);
             if (mesTextEl) {
-                mesTextEl.innerHTML = html;
+                mesTextEl.innerHTML = wrapRichMessageHtml(html);
                 return true;
             }
         } catch (uiErr) {
@@ -3849,7 +3885,7 @@ async function applyCharacterImageDisplayMode() {
                 offset += replacement.length - fullTag.length;
 
                 // 매 생성마다 메시지 데이터 + UI를 즉시 업데이트하여 순차적으로 결과가 표시되도록 한다
-                lastMsg.mes = currentMes;
+                lastMsg.mes = wrapRichMessageHtml(currentMes);
                 await updateRenderedMessageHtml(msgIdx, currentMes, '이미지');
             }
 
@@ -3889,7 +3925,7 @@ async function applyCharacterImageDisplayMode() {
             }
 
             if (updatedMes !== mes) {
-                lastMsg.mes = updatedMes;
+                lastMsg.mes = wrapRichMessageHtml(updatedMes);
                 await updateRenderedMessageHtml(msgIdx, updatedMes, '이미지 텍스트');
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
@@ -3922,7 +3958,7 @@ async function applyCharacterEmoticonDisplayMode() {
     const updatedMes = replaceAiSelectedEmoticons(mes, senderName);
     if (updatedMes === mes) return;
 
-    lastMsg.mes = updatedMes;
+    lastMsg.mes = wrapRichMessageHtml(updatedMes);
     // DOM mesid는 숫자 인덱스를 사용하므로 lastMsg 참조와 별개로 마지막 메시지 인덱스를 구한다.
     const msgIdx = Number(ctx.chat.length - 1);
     await updateRenderedMessageHtml(msgIdx, updatedMes, '이모티콘');
@@ -4150,6 +4186,7 @@ async function init() {
                         .catch(e => console.error('[ST-LifeSim] 선전화 트리거 오류:', e));
                 }
             }
+            clearScheduledGroupChatTurn();
             pendingGroupChatTurn = planGroupChatTurn();
         });
     }
@@ -4160,13 +4197,10 @@ async function init() {
             trackGifticonUsageFromCharacterMessage();
             await applyCharacterEmoticonDisplayMode().catch((e) => console.error('[ST-LifeSim] 이모티콘 표시 모드 적용 오류:', e));
             await applyCharacterImageDisplayMode().catch((e) => console.error('[ST-LifeSim] 이미지 표시 모드 적용 오류:', e));
-            if (!isGroupChatExecutionInFlight && pendingGroupChatTurn) {
+            if (pendingGroupChatTurn) {
                 const plan = pendingGroupChatTurn;
                 pendingGroupChatTurn = null;
-                isGroupChatExecutionInFlight = true;
-                await executePlannedGroupChatTurn(plan)
-                    .catch((e) => console.error('[ST-LifeSim] 단톡 자동 응답 오류:', e))
-                    .finally(() => { isGroupChatExecutionInFlight = false; });
+                schedulePlannedGroupChatTurn(plan);
             }
         });
     }

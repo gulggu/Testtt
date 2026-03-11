@@ -13,7 +13,7 @@ function clampPercent(value, fallback) {
 function clampScale(value, fallback) {
     const parsed = Number.parseFloat(value);
     if (!Number.isFinite(parsed)) return fallback;
-    return Math.max(100, Math.min(250, parsed));
+    return Math.max(100, Math.min(400, parsed));
 }
 
 export function normalizeProfileImageStyle(rawStyle, defaults = {}) {
