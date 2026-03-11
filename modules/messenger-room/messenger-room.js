@@ -1104,7 +1104,8 @@ function openRoomCreatePopup(onBack, roomId = null) {
     }, ROOM_AVATAR_PREVIEW_DEFAULTS);
 
     const updateAvatarControls = () => {
-        const isDirectRoom = !isGroupMessengerRoom({ members: [...selectedKeys] }) && getRoomContactMemberKeys({ members: [...selectedKeys] }).length === 1;
+        const contactMemberCount = getRoomContactMemberKeys({ members: [...selectedKeys] }).length;
+        const isDirectRoom = contactMemberCount === 1;
         avatarUploadBtn.disabled = isDirectRoom;
         avatarClearBtn.disabled = isDirectRoom;
         avatarScaleInput.disabled = isDirectRoom;

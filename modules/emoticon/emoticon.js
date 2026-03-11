@@ -258,7 +258,7 @@ export function replaceAiSelectedEmoticons(text, senderName = '{{char}}') {
     const resolveToken = (rawName) => {
         const normalizedSource = normalizeEmoticonName(rawName);
         if (!isSafeEmoticonTokenName(normalizedSource)) return null;
-        const numberedName = normalizedSource.replace(/^\d+\s*[\].)\-:]+\s*/, '').trim();
+        const numberedName = normalizedSource.replace(/^\d+\s*[-\].):]+\s*/, '').trim();
         const normalizedName = normalizeEmoticonName(numberedName || normalizedSource).toLowerCase();
         return htmlMap.get(normalizedName) || null;
     };
@@ -390,6 +390,18 @@ export function buildEmoticonPickerContent(options = {}) {
     let currentCategory = '전체';
     let searchQuery = '';
     let searchDebounceId = null;
+    const clearSearchDebounce = () => {
+        clearTimeout(searchDebounceId);
+        searchDebounceId = null;
+    };
+    const disconnectObserver = new MutationObserver(() => {
+        if (wrapper.isConnected) return;
+        clearSearchDebounce();
+        disconnectObserver.disconnect();
+    });
+    if (document?.body) {
+        disconnectObserver.observe(document.body, { childList: true, subtree: true });
+    }
 
     // 검색창
     const searchInput = document.createElement('input');
@@ -398,7 +410,7 @@ export function buildEmoticonPickerContent(options = {}) {
     searchInput.placeholder = '🔍 이모티콘 검색...';
     searchInput.oninput = () => {
         const nextQuery = searchInput.value.toLowerCase();
-        clearTimeout(searchDebounceId);
+        clearSearchDebounce();
         searchDebounceId = setTimeout(() => {
             if (!searchInput.isConnected) return;
             searchQuery = nextQuery;
