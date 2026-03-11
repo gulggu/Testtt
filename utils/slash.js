@@ -36,21 +36,43 @@ function escapeSlashPromptText(text) {
         .replace(/\|/g, '\\|');
 }
 
-async function generateQuietText(prompt) {
+/**
+ * 채팅창에 노출되지 않는 경로로 텍스트를 생성한다.
+ * quietName은 generateQuietPrompt 폴백에서만 의미가 있으며, slash/generateRaw 경로에서는 사용되지 않는다.
+ * @param {string} prompt
+ * @param {string} [quietName='st-lifesim']
+ * @returns {Promise<string>}
+ */
+async function generateQuietText(prompt, quietName = 'st-lifesim') {
     const ctx = getContext();
     if (prompt == null) return '';
     const quietPrompt = String(prompt).trim();
     if (!ctx || !quietPrompt) return '';
 
     try {
-        const result = await run(`/gen lock=off quiet=true ${escapeSlashPromptText(quietPrompt)}`);
-        if (result?.isError) {
-            console.warn('[ST-LifeSim] /gen lock=off quiet=true 실행 실패:', result.errorMessage || result);
-            return '';
+        if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
+            const result = await run(`/gen lock=off quiet=true ${escapeSlashPromptText(quietPrompt)}`);
+            if (result?.isError) {
+                console.warn('[ST-LifeSim] /gen lock=off quiet=true 실행 실패:', result.errorMessage || result);
+                return '';
+            }
+            return String(result?.pipe ?? result ?? '').trim();
         }
-        return String(result?.pipe ?? result ?? '').trim();
+        if (typeof ctx.generateQuietPrompt === 'function') {
+            // quietName is only meaningful for native hidden-generation APIs.
+            return String(await ctx.generateQuietPrompt({ quietPrompt, quietName }) || '').trim();
+        }
+        if (typeof ctx.generateRaw === 'function') {
+            return String(await ctx.generateRaw({
+                prompt: quietPrompt,
+                quietToLoud: false,
+                trimNames: true,
+            }) || '').trim();
+        }
+        console.warn('[ST-LifeSim] 조용한 생성용 API가 없어 /gen quiet=true 폴백을 건너뜁니다.');
+        return '';
     } catch (error) {
-        console.warn('[ST-LifeSim] /gen lock=off quiet=true 조용한 생성 실패:', error);
+        console.warn('[ST-LifeSim] 조용한 생성 실패:', error);
         return '';
     }
 }

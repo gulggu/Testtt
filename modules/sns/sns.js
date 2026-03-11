@@ -288,6 +288,7 @@ async function createSnsImagePrompt(ctx, sourcePrompt, authorName, contacts = []
         includeNames: [authorName].filter(Boolean),
         contacts,
         getAppearanceTagsByName,
+        allowMentionedContactMatches: false,
         tagWeight,
     };
     const generatedPrompt = await generateSnsText(

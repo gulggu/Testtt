@@ -391,6 +391,7 @@ function buildMatchedAppearanceGroups(matched = []) {
  *
  * @param {string} rawPrompt
  * @param {Object} options
+ * @param {boolean} [options.allowMentionedContactMatches=true] - When true, auto-match mentioned contacts; set false for flows like SNS that should not inject unrelated contacts.
  * @returns {{resolvedRawPrompt: string, matched: Array<{name: string, appearanceTags: string}>, tagWeight: number}}
  */
 function resolveImagePromptContext(rawPrompt, options = {}) {
@@ -399,15 +400,18 @@ function resolveImagePromptContext(rawPrompt, options = {}) {
         ? options.getAppearanceTagsByName
         : () => '';
     const includeNames = Array.isArray(options.includeNames) ? options.includeNames : [];
+    const allowMentionedContactMatches = options.allowMentionedContactMatches !== false;
     const tagWeight = Number(options.tagWeight) || 0;
 
     const appearanceVarMap = options.appearanceVarMap || {};
     if (Object.keys(appearanceVarMap).length === 0) {
-        for (const contact of allContacts) {
-            const name = String(contact?.name || '').trim();
-            if (!name) continue;
-            const tags = String(getAppearanceFn(name) || '').trim();
-            if (tags) appearanceVarMap[name] = tags;
+        if (allowMentionedContactMatches) {
+            for (const contact of allContacts) {
+                const name = String(contact?.name || '').trim();
+                if (!name) continue;
+                const tags = String(getAppearanceFn(name) || '').trim();
+                if (tags) appearanceVarMap[name] = tags;
+            }
         }
         for (const name of includeNames) {
             const cleanName = String(name || '').trim();
@@ -452,19 +456,21 @@ function resolveImagePromptContext(rawPrompt, options = {}) {
         });
     }
 
-    for (const contact of allContacts) {
-        const names = [contact?.name, contact?.displayName, contact?.subName]
-            .map(v => String(v || '').trim())
-            .filter(Boolean);
-        if (names.some(n => matchedNamesLower.has(n.toLowerCase()))) continue;
-        const mentioned = names.some(n => isNameMentioned(n));
-        if (mentioned) {
-            const contactName = String(contact?.name || contact?.displayName || '').trim();
-            matchedNamesLower.add(contactName.toLowerCase());
-            matched.push({
-                name: contactName,
-                appearanceTags: String(getAppearanceFn(contactName) || '').trim(),
-            });
+    if (allowMentionedContactMatches) {
+        for (const contact of allContacts) {
+            const names = [contact?.name, contact?.displayName, contact?.subName]
+                .map(v => String(v || '').trim())
+                .filter(Boolean);
+            if (names.some(n => matchedNamesLower.has(n.toLowerCase()))) continue;
+            const mentioned = names.some(n => isNameMentioned(n));
+            if (mentioned) {
+                const contactName = String(contact?.name || contact?.displayName || '').trim();
+                matchedNamesLower.add(contactName.toLowerCase());
+                matched.push({
+                    name: contactName,
+                    appearanceTags: String(getAppearanceFn(contactName) || '').trim(),
+                });
+            }
         }
     }
 
@@ -551,6 +557,8 @@ export function buildDirectImagePrompt(rawPrompt, options = {}) {
  * @param {(name: string) => string} [options.getAppearanceTagsByName] - Lookup function for appearance tags
  * @param {{ [name: string]: string }} [options.appearanceVarMap] - Pre-built appearance tag variable map
  * @param {number} [options.tagWeight] - Weight multiplier for scene tags (e.g. 5 → "5::scene tags::")
+ * @param {boolean} [options.allowMentionedContactMatches=true] - Keep true for general image flows that should infer mentioned contacts.
+ * Set false for isolated flows like SNS author-only image generation.
  * @returns {Promise<{sceneTags: string, appearanceGroups: string[], finalPrompt: string}>}
  */
 export async function generateImageTags(rawPrompt, options = {}) {
