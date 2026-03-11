@@ -2004,9 +2004,9 @@ function buildRoomListContent(onBack, initialRoomId = null) {
 }
 
 registerContextBuilder('messenger-room', buildMessengerRoomsContextSection);
-setTimeout(() => {
+queueMicrotask(() => {
     loadMessengerRooms().forEach((room) => ensureRoomAutonomySchedule(room.id));
-}, 0);
+});
 
 export function openMessengerRoomsPopup(onBack, initialRoomId = null) {
     const content = buildRoomListContent(onBack, initialRoomId);

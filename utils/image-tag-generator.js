@@ -351,7 +351,7 @@ export function buildImageApiPrompt(danbooruTags, appearanceTags, options) {
         ? appearanceTags.map(safeAppearanceGroup).filter(Boolean)
         : [safeAppearanceGroup(appearanceTags)].filter(Boolean);
 
-    const wrappedAppearance = appearanceGroups.map(a => safeAppearanceGroup(a)).filter(Boolean);
+    const wrappedAppearance = appearanceGroups;
 
     // Apply weight to scene tags if tagWeight > 0
     const wrappedScene = cleanDanbooru
@@ -504,10 +504,12 @@ export function buildDirectImagePrompt(rawPrompt, options = {}) {
         ...pipeAppearanceBlocks,
     ].filter(Boolean);
     const uniquePromptBlocks = dedupeAppearanceGroups(allPromptBlocks);
-    const sceneOnly = (pipeSceneOnly || unwrappedPrompt
-        .replace(appearanceBlockRegex, '')
-        .replace(pipeCharBlockRegex, '')
-        .replace(/\|/g, ','))
+    const sceneOnly = (pipeAppearanceBlocks.length > 0
+        ? pipeSceneOnly
+        : unwrappedPrompt
+            .replace(appearanceBlockRegex, '')
+            .replace(pipeCharBlockRegex, '')
+            .replace(/\|/g, ','))
         .split(',')
         .map(s => s.trim().replace(/^[`"'‘’“”]+|[`"'‘’“”]+$/g, '').replace(/[.!?]+$/g, ''))
         .filter(Boolean)
@@ -603,10 +605,12 @@ export async function generateImageTags(rawPrompt, options = {}) {
         ...pipeAppearanceBlocks,
     ].filter(Boolean);
     const uniqueAiBlocks = dedupeAppearanceGroups(allAiBlocks);
-    const sceneOnly = (pipeSceneOnly || unwrappedSceneTags
-        .replace(appearanceBlockRegex, '')  // Remove [Name: appearance] blocks
-        .replace(pipeCharBlockRegex, '')    // Remove Character N: (tags) blocks
-        .replace(/\|/g, ','))               // 파이프를 쉼표로 변환
+    const sceneOnly = (pipeAppearanceBlocks.length > 0
+        ? pipeSceneOnly
+        : unwrappedSceneTags
+            .replace(appearanceBlockRegex, '')  // Remove [Name: appearance] blocks
+            .replace(pipeCharBlockRegex, '')    // Remove Character N: (tags) blocks
+            .replace(/\|/g, ','))               // 파이프를 쉼표로 변환
         .split(',')
         .map(s => s.trim())
         .filter(Boolean)
@@ -664,7 +668,7 @@ function sanitizeTags(raw) {
     const bracketBlocks = [];
     const withoutBrackets = cleaned.replace(/\[[^\]]+\]/g, (match) => {
         bracketBlocks.push(match);
-        return `@@BRACKET${bracketBlocks.length - 1}@@`;
+        return `@@BRACKET_${bracketBlocks.length - 1}@@`;
     });
 
     // Reject if Korean characters appear in the scene-tag portion
@@ -685,7 +689,7 @@ function sanitizeTags(raw) {
         .replace(/\s*\|\s*/g, ' | ')
         .trim();
 
-    return cleanedParts.replace(/@@BRACKET(\d+)@@/g, (_, index) => bracketBlocks[Number(index)] || '');
+    return cleanedParts.replace(/@@BRACKET_(\d+)@@/g, (_, index) => bracketBlocks[Number(index)] || '');
 }
 
 
