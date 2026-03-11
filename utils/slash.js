@@ -29,6 +29,46 @@ async function run(command) {
     }
 }
 
+async function generateQuietText(prompt, quietName = null) {
+    const ctx = getContext();
+    if (prompt == null) return '';
+    const quietPrompt = String(prompt).trim();
+    if (!ctx || !quietPrompt) return '';
+
+    const normalizedQuietName = String(quietName || '').trim();
+
+    if (typeof ctx.generateQuietPrompt === 'function') {
+        try {
+            const quietOptions = { quietPrompt };
+            if (normalizedQuietName) {
+                quietOptions.quietName = normalizedQuietName;
+            }
+            const result = await ctx.generateQuietPrompt(quietOptions);
+            const text = String(result || '').trim();
+            if (text) return text;
+        } catch (error) {
+            console.warn('[ST-LifeSim] generateQuietPrompt 조용한 생성 실패, 다른 경로로 폴백합니다:', error);
+        }
+    }
+
+    if (typeof ctx.generateRaw === 'function') {
+        try {
+            const result = await ctx.generateRaw({
+                prompt: quietPrompt,
+                quietToLoud: false,
+                trimNames: true,
+            });
+            const text = String(result || '').trim();
+            if (text) return text;
+        } catch (error) {
+            console.warn('[ST-LifeSim] generateRaw 조용한 생성 실패, 슬래시 커맨드로 폴백합니다:', error);
+        }
+    }
+
+    const result = await run(`/gen quiet=true ${quietPrompt}`);
+    return String(result?.pipe ?? result ?? '').trim();
+}
+
 function findContactByNameVariant(name) {
     const requested = String(name || '').trim().toLowerCase();
     if (!requested) return null;
@@ -112,7 +152,12 @@ export async function slashEcho(text) {
  */
 export async function slashGen(prompt, name = null) {
     if (name) {
-        // /gen quiet=true ... | /sendas name="..." 형태로 실행
+        const generated = await generateQuietText(prompt, name);
+        if (generated) {
+            await slashSendAs(name, generated);
+            return;
+        }
+        // 최종 폴백: /gen quiet=true ... | /sendas name="..." 형태로 실행
         await run(`/gen quiet=true ${prompt} | /sendas name="${name}"`);
     } else {
         // /gen quiet=true만 단독 사용 (기본 {{char}} 응답)
@@ -126,8 +171,7 @@ export async function slashGen(prompt, name = null) {
  * @returns {Promise<string>}
  */
 export async function slashGenQuiet(prompt) {
-    const result = await run(`/gen quiet=true ${prompt}`);
-    return String(result?.pipe ?? result ?? '').trim();
+    return await generateQuietText(prompt);
 }
 
 /**
