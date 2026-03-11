@@ -43,6 +43,16 @@ async function generateQuietText(prompt) {
     if (!ctx || !quietPrompt) return '';
 
     try {
+        if (typeof ctx.generateQuietPrompt === 'function') {
+            return String(await ctx.generateQuietPrompt({ quietPrompt }) || '').trim();
+        }
+        if (typeof ctx.generateRaw === 'function') {
+            return String(await ctx.generateRaw({
+                prompt: quietPrompt,
+                quietToLoud: false,
+                trimNames: true,
+            }) || '').trim();
+        }
         const result = await run(`/gen lock=off quiet=true ${escapeSlashPromptText(quietPrompt)}`);
         if (result?.isError) {
             console.warn('[ST-LifeSim] /gen lock=off quiet=true 실행 실패:', result.errorMessage || result);
