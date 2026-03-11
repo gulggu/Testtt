@@ -11,11 +11,11 @@
  */
 
 import { getContext } from '../../utils/st-context.js';
-import { slashSend, slashSendAs, slashGen } from '../../utils/slash.js';
+import { slashSend, slashSendAs, slashGen, slashGenQuiet } from '../../utils/slash.js';
 import { loadData, saveData, getDefaultBinding, getExtensionSettings } from '../../utils/storage.js';
 import { showToast, escapeHtml, generateId, showConfirm } from '../../utils/ui.js';
 import { createPopup } from '../../utils/popup.js';
-import { getContacts } from '../contacts/contacts.js';
+import { getAllContacts } from '../contacts/contacts.js';
 
 const MODULE_KEY = 'call-logs';
 const COLLAPSED_KEY = 'call-log-collapsed';
@@ -218,6 +218,8 @@ function inferModelSettingKey(source) {
 
 async function generateCallSummaryText(ctx, quietPrompt, quietName) {
     if (!ctx) return '';
+    const slashResult = await slashGenQuiet(quietPrompt);
+    if (slashResult) return slashResult.trim();
     if (typeof ctx.generateRaw === 'function') {
         const aiRoute = getCallSummaryAiRouteSettings();
         const chatSettings = ctx.chatCompletionSettings;
@@ -540,7 +542,10 @@ Set incoming_call=true ONLY when the message clearly means "the caller is callin
 Set false for hypothetical talk, future planning, roleplay narration of an already-active call, or vague mention of phone/call.
 No prose, no markdown, JSON only.`;
     try {
-        const raw = await ctx.generateQuietPrompt({ quietPrompt: prompt, quietName: 'call-intent' }) || '';
+        const raw = (await slashGenQuiet(prompt))
+            || (typeof ctx.generateQuietPrompt === 'function'
+                ? (await ctx.generateQuietPrompt({ quietPrompt: prompt, quietName: 'call-intent' }) || '')
+                : '');
         const jsonPart = raw.match(/\{[\s\S]*\}/)?.[0];
         if (!jsonPart) return fallback;
         const parsed = JSON.parse(jsonPart);
@@ -622,7 +627,7 @@ async function showIncomingCallDialog(charName) {
 
     acceptBtn.onclick = async () => {
         cleanup();
-        const matchedContact = getContacts('chat').find(c => c.name === charName) || null;
+        const matchedContact = getAllContacts().find(c => c.name === charName) || null;
         await startCall(charName, matchedContact, 'incoming');
         const recentDialogue = buildRecentDialogueLines(5);
         await slashGen(
@@ -654,7 +659,7 @@ async function showIncomingCallDialog(charName) {
 }
 
 function getDisplayNameForContact(name) {
-    const contact = [...getContacts('chat'), ...getContacts('character')].find(c => c?.name === name);
+    const contact = getAllContacts().find(c => c?.name === name);
     return contact?.displayName || name;
 }
 
@@ -943,7 +948,7 @@ async function initiateCallWithAiDecision(charName) {
     const ctx = getContext();
     const activeChar = ctx?.name2 || '{{char}}';
     const isMainChar = charName === activeChar;
-    const matchedContact = getContacts('chat').find(c => c.name === charName);
+    const matchedContact = getAllContacts().find(c => c.name === charName);
 
     // 발신 중 메시지 삽입
     try {
@@ -959,7 +964,7 @@ async function initiateCallWithAiDecision(charName) {
     // AI에게 착신 여부를 결정하게 한다
     let acceptCall = true;
     try {
-        if (ctx && typeof ctx.generateQuietPrompt === 'function') {
+        if (ctx) {
             const userName = ctx.name1 || 'the user';
             const decisionPrompt = buildCallDecisionPrompt({
                 charName,
@@ -968,7 +973,10 @@ async function initiateCallWithAiDecision(charName) {
                 matchedContact,
                 activeChar,
             });
-            const decision = await ctx.generateQuietPrompt({ quietPrompt: decisionPrompt, quietName: charName }) || 'ACCEPT';
+            const decision = (await slashGenQuiet(decisionPrompt))
+                || (typeof ctx.generateQuietPrompt === 'function'
+                    ? (await ctx.generateQuietPrompt({ quietPrompt: decisionPrompt, quietName: charName }) || 'ACCEPT')
+                    : 'ACCEPT');
             acceptCall = !decision.toUpperCase().includes('REJECT');
         }
     } catch (e) {
@@ -1071,11 +1079,11 @@ function buildCallLogsContent() {
         opt.selected = true;
         dialSelect.appendChild(opt);
     }
-    getContacts('chat').forEach(c => {
+    getAllContacts().forEach(c => {
         if (c.name !== charName0) {
             const opt = document.createElement('option');
             opt.value = c.name;
-            opt.textContent = c.name;
+            opt.textContent = c.displayName || c.name;
             dialSelect.appendChild(opt);
         }
     });

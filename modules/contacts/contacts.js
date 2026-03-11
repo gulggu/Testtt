@@ -1230,6 +1230,23 @@ export function getContacts(binding = 'chat') {
 }
 
 /**
+ * chat/character 바인딩 전체 연락처를 중복 없이 합쳐 반환한다.
+ * @returns {Contact[]}
+ */
+export function getAllContacts() {
+    const merged = new Map();
+    [...loadContacts('chat'), ...loadContacts('character')].forEach((contact) => {
+        const contactId = String(contact?.id || '').trim();
+        const contactName = String(contact?.name || '').trim();
+        if (!contactId && !contactName) return;
+        const key = `${contact?.binding === 'character' ? 'character' : 'chat'}:${contactId || '(no-id)'}:${contactName || '(no-name)'}`;
+        if (merged.has(key)) return;
+        merged.set(key, contact);
+    });
+    return [...merged.values()];
+}
+
+/**
  * 이름으로 연락처의 외관 태그를 가져온다.
  * chat 바인딩과 character 바인딩 모두 검색하고,
  * 연락처에 없으면 characterAppearanceTags 설정도 확인한다.
