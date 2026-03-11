@@ -272,13 +272,26 @@ async function createSnsImagePrompt(ctx, sourcePrompt, authorName, contacts = []
     return { sceneTags: '', appearanceGroups: [], finalPrompt: '' };
 }
 
-async function applyGeneratedImageToPost(postId, { promptSource, authorName, fallbackImageUrl = '', onUpdate } = {}) {
+async function applyGeneratedImageToPost(postId, {
+    promptSource,
+    authorName,
+    fallbackImageUrl = '',
+    onUpdate,
+    reusePromptOnly = false,
+} = {}) {
     const ctx = getContext();
     if (!ctx) return false;
-    const contacts = [...getContacts('character'), ...getContacts('chat')];
-    const promptResult = await createSnsImagePrompt(ctx, promptSource, authorName, contacts);
-    if (!promptResult.finalPrompt) return false;
-    const generatedUrl = await generateImageViaApi(promptResult.finalPrompt);
+    let finalPrompt = String(promptSource || '').trim();
+    if (!reusePromptOnly) {
+        finalPrompt = (await createSnsImagePrompt(
+            ctx,
+            promptSource,
+            authorName,
+            [...getContacts('character'), ...getContacts('chat')],
+        )).finalPrompt;
+    }
+    if (!finalPrompt) return false;
+    const generatedUrl = await generateImageViaApi(finalPrompt);
     const feed = loadFeed();
     const post = feed.find(item => item.id === postId);
     if (!post) return false;
@@ -288,7 +301,7 @@ async function applyGeneratedImageToPost(postId, { promptSource, authorName, fal
     } else if (!post.imageUrl && fallbackImageUrl) {
         post.imageUrl = fallbackImageUrl;
     }
-    post.imagePrompt = promptResult.finalPrompt;
+    post.imagePrompt = finalPrompt;
     saveFeed(feed);
     _activeFeedRenderer?.();
     onUpdate?.();
@@ -1077,6 +1090,7 @@ function showPostContextMenu(e, post, onUpdate) {
             authorName: post.authorName,
             fallbackImageUrl: getAuthorDefaultImageUrl(post.authorName) || '',
             onUpdate,
+            reusePromptOnly: true,
         }).then((ok) => {
             if (ok) showToast('이미지 재생성 완료', 'success', 1800);
             else showToast('이미지 재생성 실패', 'warn', 1800);
