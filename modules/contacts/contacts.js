@@ -668,12 +668,18 @@ function openContactDialog(existing, defaultBinding, onSave) {
     fields.description.placeholder = `최대 ${MAX_CONTACT_DESCRIPTION_LENGTH.toLocaleString()}자`;
     const descriptionCounter = document.createElement('div');
     descriptionCounter.className = 'slm-desc';
+    descriptionCounter.setAttribute('aria-live', 'polite');
+    descriptionCounter.setAttribute('role', 'status');
     descriptionCounter.style.marginTop = '-4px';
     descriptionCounter.style.marginBottom = '8px';
     const renderDescriptionCounter = () => {
         const currentLength = fields.description.value.length;
-        descriptionCounter.textContent = `설명 ${currentLength.toLocaleString()} / ${MAX_CONTACT_DESCRIPTION_LENGTH.toLocaleString()}자`;
-        descriptionCounter.style.color = currentLength >= MAX_CONTACT_DESCRIPTION_LENGTH ? 'var(--SmartThemeQuoteColor, #e67e22)' : '';
+        const reachedLimit = currentLength >= MAX_CONTACT_DESCRIPTION_LENGTH;
+        descriptionCounter.textContent = reachedLimit
+            ? `⚠️ 설명 입력란: ${currentLength.toLocaleString()}자 입력됨, 최대 ${MAX_CONTACT_DESCRIPTION_LENGTH.toLocaleString()}자까지 입력할 수 있습니다.`
+            : `설명 입력란: ${currentLength.toLocaleString()} / ${MAX_CONTACT_DESCRIPTION_LENGTH.toLocaleString()}자`;
+        descriptionCounter.style.color = reachedLimit ? 'var(--SmartThemeQuoteColor, #e67e22)' : '';
+        descriptionCounter.style.fontWeight = reachedLimit ? '700' : '';
     };
     fields.description.insertAdjacentElement('afterend', descriptionCounter);
     fields.description.addEventListener('input', renderDescriptionCounter);
@@ -969,11 +975,11 @@ function openContactDialog(existing, defaultBinding, onSave) {
         }
         targetContacts.push(data);
         if (!saveContacts(targetContacts, targetBinding)) {
-            showToast('연락처 저장에 실패했습니다. 설명이나 이미지 길이를 줄인 뒤 다시 시도해주세요.', 'error');
+            showToast('연락처 저장에 실패했습니다. 브라우저 저장 공간을 확인한 뒤 다시 시도해주세요.', 'error');
             return;
         }
         if (targetBinding !== sourceBinding && !saveContacts(sourceContacts, sourceBinding)) {
-            showToast('연락처는 저장되었지만 기존 저장 범위 정리에 실패했습니다. 새로고침 후 중복 여부를 확인해주세요.', 'warn', 5000);
+            showToast('연락처는 저장되었지만 기존 저장 범위 정리에 실패했습니다. 새로고침 후 중복 연락처가 있으면 하나를 삭제해주세요.', 'warn', 5000);
         }
 
         // 유저 자동 연락처: 편집 내용은 현재 캐릭터(페르소나)에만 저장
