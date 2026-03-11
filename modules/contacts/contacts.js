@@ -548,24 +548,8 @@ function buildContactsContent() {
             editBtn.textContent = '편집';
             editBtn.onclick = (e) => { e.stopPropagation(); openContactDialog(contact, contact.binding || 'chat', syncAndRenderList); };
 
-            // 삭제 버튼
-            const delBtn = document.createElement('button');
-            delBtn.className = 'slm-btn slm-btn-danger slm-btn-sm';
-            delBtn.textContent = '삭제';
-            delBtn.onclick = (e) => {
-                e.stopPropagation();
-                const targetBinding = contact.binding || 'chat';
-                const updated = loadContacts(targetBinding).filter(c => c.id !== contact.id);
-                saveContacts(updated, targetBinding);
-                syncAndRenderList();
-                showToast('연락처 삭제', 'success', 1500);
-            };
-
             row.appendChild(clickArea);
             row.appendChild(editBtn);
-            if (!contact.isCharAuto && !contact.isUserAuto) {
-                row.appendChild(delBtn);
-            }
             list.appendChild(row);
         });
     }
@@ -933,6 +917,26 @@ function openContactDialog(existing, defaultBinding, onSave) {
     const saveBtn = document.createElement('button');
     saveBtn.className = 'slm-btn slm-btn-primary';
     saveBtn.textContent = '저장';
+
+    if (isEdit && !existing?.isCharAuto && !existing?.isUserAuto) {
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'slm-btn slm-btn-danger';
+        deleteBtn.textContent = '삭제';
+        deleteBtn.onclick = async () => {
+            const confirmed = await showConfirm('이 연락처를 정말 삭제할까요?', '삭제', '취소');
+            if (!confirmed) return;
+            const targetBinding = existing?.binding || defaultBinding || 'chat';
+            const updated = loadContacts(targetBinding).filter(c => c.id !== existing.id);
+            if (!saveContacts(updated, targetBinding)) {
+                showToast('연락처 삭제에 실패했습니다.', 'error');
+                return;
+            }
+            close();
+            onSave();
+            showToast('연락처 삭제', 'success', 1500);
+        };
+        footer.appendChild(deleteBtn);
+    }
 
     footer.appendChild(cancelBtn);
     footer.appendChild(saveBtn);
