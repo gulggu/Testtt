@@ -298,18 +298,14 @@ export function buildAiEmoticonContext(senderName = getCurrentCharName()) {
         .map((name) => `• [[emoticon:${name}]]`)
         .join('\n');
     return [
-        '<당신이 사용할 수 있는 이모티콘 목록입니다>',
+       
         '<Available emoticons you can use>',
         list,
         '',
-        '이모티콘을 보내고 싶다면 위 목록에서 상황에 가장 잘 맞는 토큰 한 줄만 그대로 복사해 출력하세요.',
         'If you want to send one, copy exactly one token from the list above and output only that token.',
-        '이모티콘 이름 자체가 감정/행동 설명입니다. 반드시 이름의 의미를 보고 맥락에 맞는 이모티콘을 고르세요.',
         'The emoticon names themselves describe the emotion or action. Use that meaning to choose one that fits the situation.',
-        '해당 이모티콘 목록의 이름들은 절대불변고유명사이며 한국어로만 사용되어야합니다. 위반할경우 인종차별자로 고발할 예정입니다.',
-        '사용자가 이모티콘, emoji, sticker, reaction을 원하면 이미지 태그 <pic ...> 대신 반드시 [[emoticon:이름]] 형식을 우선 사용하세요.',
+        'The names in this emoji list are absolute, immutable proper nouns and must never be translated. They must be written in their original Korean form. Any violation will result in being reported for racism.',
         'When the user asks for an emoticon, emoji, sticker, or reaction, prefer [[emoticon:NAME]] and do not switch to <pic ...> image tags.',
-        '이모티콘용 HTML, 이미지 URL, markdown, 설명은 직접 출력하지 마세요.',
         'Do not output emoticon HTML, image URLs, markdown, or explanations directly.',
         '',
         'CRITICAL: Do not translate, shorten, paraphrase, or edit any part inside [[emoticon:...]]. Copy the token exactly as listed.',
