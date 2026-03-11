@@ -670,6 +670,12 @@ export async function triggerUserImageGenerationAndSend(prompt) {
     return true;
 }
 
+/**
+ * 유저 이미지 생성/전송 작업을 백그라운드처럼 시작하고 완료 콜백을 연결한다.
+ * @param {string} prompt - 이미지 생성 프롬프트
+ * @param {{ onSuccess?: Function, onFailure?: Function, onFinally?: Function }} [callbacks]
+ * @returns {Promise<boolean>} 생성/전송 성공 여부
+ */
 export function triggerUserImageGenerationAndSendInBackground(prompt, callbacks = {}) {
     const trimmed = String(prompt || '').trim();
     if (!trimmed) return Promise.resolve(false);
@@ -694,7 +700,6 @@ export function triggerUserImageGenerationAndSendInBackground(prompt, callbacks 
             onFinally?.();
         }
     })();
-    void task.catch(() => {});
     return task;
 }
 

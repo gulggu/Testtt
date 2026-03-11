@@ -612,12 +612,7 @@ function openUserImagePromptPopup() {
         genBtn.disabled = true;
         genBtn.textContent = '⏳ 생성 중...';
         close();
-        void triggerUserImageGenerationAndSendInBackground(prompt, {
-            onFinally: () => {
-                genBtn.disabled = false;
-                genBtn.textContent = '🎨 이미지 생성';
-            },
-        });
+        void triggerUserImageGenerationAndSendInBackground(prompt);
     };
 
     // Enter 키로 생성 (Shift+Enter는 줄바꿈)
