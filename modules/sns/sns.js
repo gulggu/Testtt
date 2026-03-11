@@ -266,6 +266,8 @@ function buildSnsDirectImagePromptRequest(sourcePrompt, authorName) {
         '',
         '[Output rule]',
         `Return exactly one final direct image prompt for the author.`,
+        'Include only the author in the final prompt.',
+        'Do not include other contacts, bystanders, or secondary character appearance blocks unless the author alone is impossible.',
         'Output ONLY one line of English Danbooru-style tags for direct image generation.',
         'Do NOT write prose, captions, narration, or sentence-style descriptions.',
         'Format exactly as "scene tags | Character 1: appearance tags" and keep the surrounding double quotes.',
@@ -284,9 +286,15 @@ function buildSnsDirectImagePromptRequest(sourcePrompt, authorName) {
 async function createSnsImagePrompt(ctx, sourcePrompt, authorName, contacts = []) {
     if (!ctx) return { sceneTags: '', appearanceGroups: [], finalPrompt: '' };
     const tagWeight = Number(getExtensionSettings()?.['st-lifesim']?.tagWeight) || 0;
+    const authorContact = resolveContactProfile(authorName);
     const promptOptions = {
         includeNames: [authorName].filter(Boolean),
-        contacts,
+        contacts: authorContact ? [authorContact] : contacts.filter((contact) => {
+            const names = [contact?.name, contact?.displayName, contact?.subName]
+                .map(value => String(value || '').trim().toLowerCase())
+                .filter(Boolean);
+            return names.includes(String(authorName || '').trim().toLowerCase());
+        }),
         getAppearanceTagsByName,
         tagWeight,
     };
