@@ -391,6 +391,7 @@ function buildMatchedAppearanceGroups(matched = []) {
  *
  * @param {string} rawPrompt
  * @param {Object} options
+ * @param {boolean} [options.allowMentionedContactMatches=true] - When true, auto-match mentioned contacts; set false for flows like SNS that should not inject unrelated contacts.
  * @returns {{resolvedRawPrompt: string, matched: Array<{name: string, appearanceTags: string}>, tagWeight: number}}
  */
 function resolveImagePromptContext(rawPrompt, options = {}) {
@@ -556,6 +557,8 @@ export function buildDirectImagePrompt(rawPrompt, options = {}) {
  * @param {(name: string) => string} [options.getAppearanceTagsByName] - Lookup function for appearance tags
  * @param {{ [name: string]: string }} [options.appearanceVarMap] - Pre-built appearance tag variable map
  * @param {number} [options.tagWeight] - Weight multiplier for scene tags (e.g. 5 → "5::scene tags::")
+ * @param {boolean} [options.allowMentionedContactMatches=true] - Keep true for general image flows that should infer mentioned contacts.
+ * Set false for isolated flows like SNS author-only image generation.
  * @returns {Promise<{sceneTags: string, appearanceGroups: string[], finalPrompt: string}>}
  */
 export async function generateImageTags(rawPrompt, options = {}) {

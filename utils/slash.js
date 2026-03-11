@@ -36,6 +36,13 @@ function escapeSlashPromptText(text) {
         .replace(/\|/g, '\\|');
 }
 
+/**
+ * 채팅창에 노출되지 않는 경로로 텍스트를 생성한다.
+ * quietName은 generateQuietPrompt 폴백에서만 의미가 있으며, slash/generateRaw 경로에서는 사용되지 않는다.
+ * @param {string} prompt
+ * @param {string} [quietName='st-lifesim']
+ * @returns {Promise<string>}
+ */
 async function generateQuietText(prompt, quietName = 'st-lifesim') {
     const ctx = getContext();
     if (prompt == null) return '';
@@ -52,6 +59,7 @@ async function generateQuietText(prompt, quietName = 'st-lifesim') {
             return String(result?.pipe ?? result ?? '').trim();
         }
         if (typeof ctx.generateQuietPrompt === 'function') {
+            // quietName is only meaningful for native hidden-generation APIs.
             return String(await ctx.generateQuietPrompt({ quietPrompt, quietName }) || '').trim();
         }
         if (typeof ctx.generateRaw === 'function') {
