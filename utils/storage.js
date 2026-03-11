@@ -57,8 +57,10 @@ export function saveData(module, data, binding = 'chat') {
     const key = `${PREFIX}${module}:${getBindingKey(binding)}`;
     try {
         localStorage.setItem(key, JSON.stringify(data));
+        return true;
     } catch (e) {
         console.error('[ST-LifeSim] 저장 오류:', e);
+        return false;
     }
 }
 

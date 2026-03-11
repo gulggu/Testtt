@@ -18,6 +18,7 @@ import { getAllEmoticonCategories } from '../emoticon/emoticon.js';
 
 const MODULE_KEY = 'contacts';
 const MAX_AI_CONTACT_KEYWORD_LENGTH = 200;
+const MAX_CONTACT_DESCRIPTION_LENGTH = 5000;
 const LEGACY_CONTACT_ID_FIELDS = ['name', 'displayName', 'subName'];
 const MODEL_KEY_BY_SOURCE = {
     openai: 'openai_model',
@@ -165,7 +166,7 @@ function saveContacts(contacts, binding = 'chat') {
             .map((contact) => normalizeContact(contact, binding))
             .filter((contact) => contact && contact.name)
         : [];
-    saveData(MODULE_KEY, normalizedContacts, binding);
+    return saveData(MODULE_KEY, normalizedContacts, binding);
 }
 
 function getAvatarStyle(contact, defaults) {
@@ -663,6 +664,26 @@ function openContactDialog(existing, defaultBinding, onSave) {
         personality: createFormField(wrapper, '성격/말투', 'text', existing?.personality || ''),
         appearanceTags: createFormField(wrapper, '🏷️ 외관 태그 (이미지 생성용)', 'text', existing?.appearanceTags || ''),
     };
+    fields.description.maxLength = MAX_CONTACT_DESCRIPTION_LENGTH;
+    fields.description.placeholder = `최대 ${MAX_CONTACT_DESCRIPTION_LENGTH.toLocaleString()}자`;
+    const descriptionCounter = document.createElement('div');
+    descriptionCounter.className = 'slm-desc';
+    descriptionCounter.setAttribute('aria-live', 'polite');
+    descriptionCounter.setAttribute('role', 'status');
+    descriptionCounter.style.marginTop = '-4px';
+    descriptionCounter.style.marginBottom = '8px';
+    const renderDescriptionCounter = () => {
+        const currentLength = fields.description.value.length;
+        const reachedLimit = currentLength >= MAX_CONTACT_DESCRIPTION_LENGTH;
+        descriptionCounter.textContent = reachedLimit
+            ? `⚠️ 설명 입력란: ${currentLength.toLocaleString()}자 입력됨, 최대 ${MAX_CONTACT_DESCRIPTION_LENGTH.toLocaleString()}자까지 입력할 수 있습니다.`
+            : `설명 입력란: ${currentLength.toLocaleString()} / ${MAX_CONTACT_DESCRIPTION_LENGTH.toLocaleString()}자`;
+        descriptionCounter.style.color = reachedLimit ? 'var(--SmartThemeQuoteColor, #e67e22)' : '';
+        descriptionCounter.style.fontWeight = reachedLimit ? '700' : '';
+    };
+    fields.description.insertAdjacentElement('afterend', descriptionCounter);
+    fields.description.addEventListener('input', renderDescriptionCounter);
+    renderDescriptionCounter();
     const groupParticipantWrap = document.createElement('label');
     groupParticipantWrap.className = 'slm-toggle-label';
     groupParticipantWrap.style.marginTop = '4px';
@@ -899,8 +920,13 @@ function openContactDialog(existing, defaultBinding, onSave) {
         const isUserAuto = existing?.isUserAuto === true;
         const name = (isCharAuto || isUserAuto) ? (existing?.displayName || existing?.name || '').trim() : fields.name.value.trim();
         const relationToUser = fields.relationToUser.value.trim();
+        const description = (isCharAuto || isUserAuto) ? (existing?.description || '') : fields.description.value.trim();
         if (!name || (!isUserAuto && !relationToUser)) {
             showToast('이름과 관계는 필수입니다.', 'warn');
+            return;
+        }
+        if (!isCharAuto && !isUserAuto && description.length > MAX_CONTACT_DESCRIPTION_LENGTH) {
+            showToast(`설명은 ${MAX_CONTACT_DESCRIPTION_LENGTH.toLocaleString()}자 이하로 입력해주세요.`, 'warn');
             return;
         }
 
@@ -927,7 +953,7 @@ function openContactDialog(existing, defaultBinding, onSave) {
             subName: fields.subName.value.trim(),
             avatar: fields.avatar.value.trim(),
             avatarStyle: getDraftAvatarStyle(),
-            description: (isCharAuto || isUserAuto) ? (existing?.description || '') : fields.description.value.trim(),
+            description,
             relationToUser: isUserAuto ? (existing?.relationToUser || '본인') : relationToUser,
             relationToChar: fields.relationToChar.value.trim(),
             personality: fields.personality.value.trim(),
@@ -948,10 +974,13 @@ function openContactDialog(existing, defaultBinding, onSave) {
             if (idx !== -1) sourceContacts.splice(idx, 1);
         }
         targetContacts.push(data);
-        if (targetBinding !== sourceBinding) {
-            saveContacts(sourceContacts, sourceBinding);
+        if (!saveContacts(targetContacts, targetBinding)) {
+            showToast('연락처 저장에 실패했습니다. 브라우저 저장 공간을 확인한 뒤 다시 시도해주세요.', 'error');
+            return;
         }
-        saveContacts(targetContacts, targetBinding);
+        if (targetBinding !== sourceBinding && !saveContacts(sourceContacts, sourceBinding)) {
+            showToast('연락처는 저장되었지만 기존 저장 범위 정리에 실패했습니다. 새로고침 후 중복 연락처가 있으면 하나를 삭제해주세요.', 'warn', 5000);
+        }
 
         // 유저 자동 연락처: 편집 내용은 현재 캐릭터(페르소나)에만 저장
         // 글로벌 프로필 동기화를 하지 않으므로 다른 페르소나에 영향을 주지 않는다
