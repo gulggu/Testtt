@@ -26,6 +26,10 @@ const ROOM_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen the responder would
 const ROOM_PIC_TAG_REGEX = /<?pic\s+[^>\n]*?\bprompt\s*=\s*(?:"([^"]*)"|'([^']*)')(?:\s*\/?\s*>)?/gi;
 const ROOM_EMOTICON_ONLY_HTML_REGEX = /^<img\b[^>]*aria-label="[^"]*이모티콘[^"]*"[^>]*>$/i;
 const ROOM_EMOTICON_TOKEN_ONLY_REGEX = /^\s*\[\[\s*emoticon\s*:\s*[^\]]+\s*\]\]\s*$/i;
+const ROOM_INDIRECT_CONTEXT_RULES = [
+    'Important: {{char}} is NOT a member of this room, so {{char}} must not know or quote the exact private messages here.',
+    'If this topic comes up, {{char}} may only mention it indirectly, cautiously, or as a vague suspicion based on what {{user}} could have noticed or voluntarily mentioned.',
+];
 const ROOM_DEFAULTS = {
     autoReplyEnabled: true,
     responseProbability: 100,
@@ -637,8 +641,7 @@ function buildIndirectRoomContext(room, candidateMap) {
         memberLabels.length ? `Members: ${memberLabels.join(', ')}` : '',
         categories.length ? `Categories: ${categories.join(', ')}` : '',
         updatedAt ? `Recent activity: ${updatedAt}` : '',
-        'Important: {{char}} is NOT a member of this room, so {{char}} must not know or quote the exact private messages here.',
-        'If this topic comes up, {{char}} may only mention it indirectly, cautiously, or as a vague suspicion based on what {{user}} could have noticed or voluntarily mentioned.',
+        ...ROOM_INDIRECT_CONTEXT_RULES,
     ].filter(Boolean).join('\n');
 }
 

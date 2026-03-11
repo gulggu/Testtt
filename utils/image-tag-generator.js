@@ -477,6 +477,14 @@ function resolveImagePromptContext(rawPrompt, options = {}) {
     return { resolvedRawPrompt, matched, tagWeight };
 }
 
+function trimOuterSquareBrackets(text) {
+    const trimmed = String(text || '').trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        return trimmed.slice(1, -1).trim();
+    }
+    return trimmed;
+}
+
 function parsePipePromptFormat(text) {
     const normalized = String(text || '')
         .replace(/[\r\n]+/g, ' ')
@@ -490,7 +498,7 @@ function parsePipePromptFormat(text) {
         .filter(Boolean);
     if (parts.length < 2) return null;
     const [sceneTags, ...appearanceParts] = parts;
-    const appearanceGroups = dedupeAppearanceGroups(appearanceParts.map((part) => String(part || '').replace(/^\[|\]$/g, '').trim()));
+    const appearanceGroups = dedupeAppearanceGroups(appearanceParts.map((part) => trimOuterSquareBrackets(part)));
     if (!sceneTags && appearanceGroups.length === 0) return null;
     return {
         sceneTags: sanitizeTags(sceneTags),
