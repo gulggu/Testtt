@@ -1408,7 +1408,7 @@ function clearScheduledGroupChatTurn() {
 function schedulePlannedGroupChatTurn(plan) {
     clearScheduledGroupChatTurn();
     if (!plan) return;
-    const delay = GROUP_CHAT_REPLY_DELAY_MIN_MS + Math.floor(Math.random() * (GROUP_CHAT_REPLY_DELAY_MAX_MS - GROUP_CHAT_REPLY_DELAY_MIN_MS + 1));
+    const delay = GROUP_CHAT_REPLY_DELAY_MIN_MS + Math.floor(Math.random() * (GROUP_CHAT_REPLY_DELAY_MAX_MS - GROUP_CHAT_REPLY_DELAY_MIN_MS));
     pendingGroupChatTimeoutId = setTimeout(async () => {
         pendingGroupChatTimeoutId = null;
         if (isGroupChatExecutionInFlight) return;

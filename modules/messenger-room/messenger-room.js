@@ -295,7 +295,7 @@ function removeRoomMessage(roomId, messageId) {
 }
 
 function getRoomAutoReplyDelay() {
-    return ROOM_AUTONOMY_DELAY_MIN_MS + Math.floor(Math.random() * (ROOM_AUTONOMY_DELAY_MAX_MS - ROOM_AUTONOMY_DELAY_MIN_MS + 1));
+    return ROOM_AUTONOMY_DELAY_MIN_MS + Math.floor(Math.random() * (ROOM_AUTONOMY_DELAY_MAX_MS - ROOM_AUTONOMY_DELAY_MIN_MS));
 }
 
 function clearRoomAutoReplySchedule(roomId) {
