@@ -21,7 +21,7 @@ import { showToast, showConfirm, escapeHtml } from './utils/ui.js';
 import { exportAllData, importAllData, clearAllData } from './utils/storage.js';
 import { renderTimeDividerUI, renderReadReceiptUI, renderNoContactUI, renderEventGeneratorUI, renderVoiceMemoUI, triggerQuickSend, triggerReadReceipt, triggerNoContact, triggerUserImageGenerationAndSend, triggerVoiceMemoInsertion, triggerDeletedMessage } from './modules/quick-tools/quick-tools.js';
 import { startFirstMsgTimer, renderFirstMsgSettingsUI } from './modules/firstmsg/firstmsg.js';
-import { initEmoticon, openEmoticonPopup, replaceAiSelectedEmoticons } from './modules/emoticon/emoticon.js';
+import { buildAiEmoticonContext, initEmoticon, openEmoticonPopup, replaceAiSelectedEmoticons } from './modules/emoticon/emoticon.js';
 import { initContacts, openContactsPopup, getContacts, getAppearanceTagsByName, buildAppearanceTagVariableMap, resolveAppearanceTagVariables } from './modules/contacts/contacts.js';
 import { initCall, isCallActive, onCharacterMessageRenderedForProactiveCall, openCallLogsPopup, triggerProactiveIncomingCall, requestActiveCharacterCall } from './modules/call/call.js';
 import { initWallet, openWalletPopup } from './modules/wallet/wallet.js';
@@ -1195,12 +1195,73 @@ function buildGroupChatTranscript(limit = GROUP_CHAT_TRANSCRIPT_LIMIT) {
     }).join('\n');
 }
 
+async function enrichGroupChatReplyContent(text, senderName, transcript) {
+    const settings = getSettings();
+    const normalizedSource = normalizeQuotesForPicTag(String(text || ''));
+    PIC_TAG_REGEX.lastIndex = 0;
+    const picMatches = [...normalizedSource.matchAll(PIC_TAG_REGEX)];
+    let currentMes = normalizedSource;
+    const imagePlaceholders = new Map();
+    let imageCounter = 0;
+    if (picMatches.length > 0) {
+        const limitedPicMatches = picMatches.slice(0, MAX_MESSENGER_IMAGES_PER_RESPONSE);
+        const limitedSet = new Set(limitedPicMatches.map((match) => match.index));
+        const ctx = getContext();
+        const userName = ctx?.name1 || '';
+        const allContactsList = [...getContacts('character'), ...getContacts('chat')];
+        let offset = 0;
+        for (const match of picMatches) {
+            const fullTag = match[0];
+            const rawPrompt = (match[1] || match[2] || '').trim();
+            const adjustedIndex = match.index + offset;
+            let replacement = '';
+            if (rawPrompt) {
+                if (limitedSet.has(match.index) && !isCallActive() && settings.messageImageGenerationMode) {
+                    const includeNames = [senderName];
+                    collectMentionedContactNames(`${transcript}\n${rawPrompt}`, allContactsList).forEach((name) => {
+                        if (name && !includeNames.includes(name)) includeNames.push(name);
+                    });
+                    const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
+                    if (userName && userHintRegex.test(rawPrompt.toLowerCase())) includeNames.push(userName);
+                    const result = await processMessengerImageGeneration(rawPrompt, {
+                        charName: senderName,
+                        includeNames,
+                        contacts: allContactsList,
+                        settings,
+                    });
+                    if (result.imageUrl) {
+                        const safeUrl = escapeHtml(result.imageUrl);
+                        const safePrompt = escapeHtml(rawPrompt);
+                        const placeholder = `__GROUP_IMG_${imageCounter++}__`;
+                        imagePlaceholders.set(placeholder, `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image" style="max-width:100%;border-radius:var(--slm-image-radius,10px);margin:4px 0">`);
+                        replacement = placeholder;
+                    } else {
+                        replacement = result.fallbackText;
+                    }
+                } else {
+                    const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
+                    replacement = template.replace(/\{description\}/g, rawPrompt);
+                }
+            }
+            currentMes = currentMes.slice(0, adjustedIndex) + replacement + currentMes.slice(adjustedIndex + fullTag.length);
+            offset += replacement.length - fullTag.length;
+        }
+    }
+    let richHtml = replaceAiSelectedEmoticons(escapeHtml(currentMes).replace(/\n/g, '<br>'), senderName);
+    imagePlaceholders.forEach((imageHtml, placeholder) => {
+        richHtml = richHtml.replace(new RegExp(placeholder, 'g'), imageHtml);
+    });
+    return richHtml;
+}
+
 async function generateGroupChatReply(responder, roster) {
     const ctx = getContext();
     if (!ctx) return '';
+    const settings = getSettings();
     const transcript = buildGroupChatTranscript();
     const responderName = sanitizeGroupChatPromptField(responder.displayName || responder.name);
     const latestUserMessage = sanitizeGroupChatPromptField(ctx?.chat?.[ctx.chat.length - 1]?.mes || '');
+    const emoticonContext = buildAiEmoticonContext(responderName);
     const rosterText = roster.map((entry) => {
         const details = [];
         if (entry.relationToUser) details.push(`Relation to {{user}}: ${sanitizeGroupChatPromptField(entry.relationToUser)}`);
@@ -1255,6 +1316,12 @@ async function generateGroupChatReply(responder, roster) {
         '',
         `[Latest user message]\n${latestUserMessage || '(empty)'}`,
         '',
+        emoticonContext,
+        '',
+        settings.messageImageGenerationMode
+            ? (settings.messageImageInjectionPrompt || DEFAULT_SETTINGS.messageImageInjectionPrompt)
+            : MSG_IMAGE_OFF_PROMPT,
+        '',
         `Output only ${responderName}'s next message.`,
     ].filter(Boolean).join('\n');
 
@@ -1264,7 +1331,9 @@ async function generateGroupChatReply(responder, roster) {
     } else if (typeof ctx.generateRaw === 'function') {
         rawReply = await ctx.generateRaw({ prompt, quietToLoud: false, trimNames: true });
     }
-    return sanitizeGroupChatReply(rawReply, responder.displayName, roster);
+    const sanitizedReply = sanitizeGroupChatReply(rawReply, responder.displayName, roster);
+    if (!sanitizedReply) return '';
+    return enrichGroupChatReplyContent(sanitizedReply, responderName, transcript);
 }
 
 function pickRandomGroupResponder(candidates) {

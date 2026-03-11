@@ -1,14 +1,19 @@
 import { getContext } from '../../utils/st-context.js';
-import { loadData, saveData } from '../../utils/storage.js';
+import { getExtensionSettings, loadData, saveData } from '../../utils/storage.js';
 import { createPopup, closePopup } from '../../utils/popup.js';
-import { getContacts } from '../contacts/contacts.js';
-import { generateId, showConfirm, showToast } from '../../utils/ui.js';
+import { getAppearanceTagsByName, getContacts } from '../contacts/contacts.js';
+import { buildAiEmoticonContext, replaceAiSelectedEmoticons } from '../emoticon/emoticon.js';
+import { buildDirectImagePrompt } from '../../utils/image-tag-generator.js';
+import { escapeHtml, generateId, showConfirm, showToast } from '../../utils/ui.js';
 
 const MODULE_KEY = 'messenger-rooms';
 const MAIN_CHAR_MEMBER_KEY = '__main_char__';
 const USER_MEMBER_KEY = '__user__';
 const ROOM_MESSAGE_LIMIT = 18;
 const ROOM_MESSAGE_STORAGE_LIMIT = 80;
+const ROOM_IMAGE_TEXT_TEMPLATE_DEFAULT = '[사진: {description}]';
+const ROOM_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen the selected messenger-room responder would naturally TAKE A PHOTO with their phone and SEND IT in this room, insert a <pic prompt="image description in Korean for the photo situation"> tag at that point.\nOnly use <pic> for a photo the responder could realistically take and deliberately send.\nDo not generate scene narration, mood illustrations, or impossible third-person shots.\n</image_generation_rule>';
+const ROOM_PIC_TAG_REGEX = /<?pic\s+[^>\n]*?\bprompt\s*=\s*(?:"([^"]*)"|'([^']*)')(?:\s*\/?\s*>)?/gi;
 const ROOM_DEFAULTS = {
     autoReplyEnabled: true,
     responseProbability: 100,
@@ -34,6 +39,7 @@ export function normalizeMessengerRooms(rooms = []) {
                     authorKey: String(message?.authorKey || '').trim(),
                     authorName: String(message?.authorName || '').trim(),
                     text: String(message?.text || '').trim(),
+                    html: String(message?.html || '').trim(),
                     timestamp: Number(message?.timestamp) || Date.now(),
                     type: String(message?.type || 'message').trim() || 'message',
                 })).filter((message) => message.text)
@@ -113,12 +119,28 @@ function normalizeRoomPromptText(text) {
         .trim();
 }
 
+function normalizeRoomGeneratedReplyText(text) {
+    return String(text || '')
+        .replace(/\r/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function normalizeQuotesForRoomPicTag(text) {
+    return String(text || '')
+        .replace(/[\u201C\u201D\u201E\u201F\uFF02]/g, '"')
+        .replace(/[\u2018\u2019\u201A\u201B\uFF07]/g, "'")
+        .replace(/&lt;(\s*pic\s+[^\n]*?prompt\s*=\s*)&quot;([^\n]*?)&quot;(\s*\/?\s*)&gt;/gi, '<$1"$2"$3>')
+        .replace(/&lt;(\s*pic\s+[^\n]*?prompt\s*=\s*)&quot;([^\n]*?)&quot;/gi, '<$1"$2"')
+        .replace(/`(<?\s*pic\s+[^`\n]*?prompt\s*=\s*(?:"[^"]*"|'[^']*')(?:\s*\/?\s*>)?)`/gi, '$1');
+}
+
 function escapeRegex(value) {
     return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function sanitizeRoomReply(text, responderName, memberLabels = []) {
-    let cleaned = normalizeRoomPromptText(text);
+    let cleaned = normalizeRoomGeneratedReplyText(text);
     if (!cleaned) return '';
     cleaned = cleaned
         .replace(new RegExp(`^${escapeRegex(responderName)}\\s*[:：-]\\s*`, 'i'), '')
@@ -247,6 +269,163 @@ function buildRoomTranscript(room, candidateMap) {
     }).join('\n');
 }
 
+function getRoomImageSettings() {
+    const ext = getExtensionSettings()?.['st-lifesim'] || {};
+    return {
+        messageImageGenerationMode: ext.messageImageGenerationMode === true,
+        messageImageTextTemplate: String(ext.messageImageTextTemplate || ROOM_IMAGE_TEXT_TEMPLATE_DEFAULT),
+        messageImageInjectionPrompt: String(ext.messageImageInjectionPrompt || '').trim(),
+        snsExternalApiUrl: String(ext.snsExternalApiUrl || '').trim(),
+        snsExternalApiTimeoutMs: Math.max(1000, Math.min(60000, Number(ext.snsExternalApiTimeoutMs) || 12000)),
+        tagWeight: Number(ext.tagWeight) || 0,
+    };
+}
+
+function isNameMentionedInRoomText(textLower, name) {
+    const normalized = String(name || '').trim().toLowerCase();
+    if (!normalized) return false;
+    if (/^[a-z0-9_]+$/i.test(normalized)) {
+        const re = new RegExp(`(^|[^a-z0-9_])${normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9_]|$)`, 'i');
+        return re.test(textLower);
+    }
+    return textLower.includes(normalized);
+}
+
+function collectMentionedRoomContactNames(text, contacts = []) {
+    const textLower = String(text || '').toLowerCase();
+    if (!textLower) return [];
+    const names = [];
+    const seen = new Set();
+    contacts.forEach((contact) => {
+        const aliases = [contact?.name, contact?.displayName, contact?.subName]
+            .map((value) => String(value || '').trim())
+            .filter(Boolean);
+        if (!aliases.length || !aliases.some((alias) => isNameMentionedInRoomText(textLower, alias))) return;
+        const canonicalName = String(contact?.name || contact?.displayName || '').trim();
+        const key = canonicalName.toLowerCase();
+        if (!canonicalName || seen.has(key)) return;
+        seen.add(key);
+        names.push(canonicalName);
+    });
+    return names;
+}
+
+async function generateRoomMessageImageViaApi(imagePrompt) {
+    if (!imagePrompt || !imagePrompt.trim()) return '';
+    const ctx = getContext();
+    if (!ctx) return '';
+    const settings = getRoomImageSettings();
+    if (settings.snsExternalApiUrl && typeof fetch === 'function') {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), settings.snsExternalApiTimeoutMs);
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            if (typeof ctx.getRequestHeaders === 'function') Object.assign(headers, ctx.getRequestHeaders());
+            const response = await fetch(settings.snsExternalApiUrl, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ prompt: imagePrompt, module: 'st-lifesim-room-image' }),
+                signal: controller.signal,
+            });
+            if (response.ok) {
+                const rawText = await response.text();
+                let result = String(rawText || '').trim();
+                try {
+                    const parsed = JSON.parse(rawText || 'null');
+                    if (typeof parsed === 'string') result = parsed.trim();
+                    else if (typeof parsed?.url === 'string') result = parsed.url.trim();
+                    else if (typeof parsed?.imageUrl === 'string') result = parsed.imageUrl.trim();
+                    else if (typeof parsed?.text === 'string') result = parsed.text.trim();
+                } catch { /* keep plain text response */ }
+                if (result && (result.startsWith('http') || result.startsWith('/') || result.startsWith('data:'))) {
+                    return result;
+                }
+            }
+        } catch (error) {
+            console.warn('[ST-LifeSim] 메신저 방 이미지 외부 API 호출 실패:', error);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+    if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
+        const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${imagePrompt}`, { showOutput: false });
+        const resultStr = String(result?.pipe || result || '').trim();
+        if (resultStr && (resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:'))) {
+            return resultStr;
+        }
+    }
+    return '';
+}
+
+async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
+    const settings = getRoomImageSettings();
+    const allContactsList = [...getContacts('character'), ...getContacts('chat')];
+    const normalizedSource = normalizeQuotesForRoomPicTag(String(rawText || ''));
+    let processedText = normalizedSource;
+    const imagePlaceholders = new Map();
+    let imageCounter = 0;
+    const transcript = buildRoomTranscript(room, candidateMap);
+    const userName = String(getContext()?.name1 || '').trim();
+    ROOM_PIC_TAG_REGEX.lastIndex = 0;
+    const picMatches = [...normalizedSource.matchAll(ROOM_PIC_TAG_REGEX)];
+    if (picMatches.length > 0) {
+        const replacements = [];
+        for (const match of picMatches.slice(0, 3)) {
+            const fullTag = match[0];
+            const rawPrompt = String(match[1] || match[2] || '').trim();
+            let replacement = '';
+            if (rawPrompt) {
+                if (settings.messageImageGenerationMode) {
+                    const includeNames = [senderName];
+                    collectMentionedRoomContactNames(`${transcript}\n${rawPrompt}`, allContactsList).forEach((name) => {
+                        if (name && !includeNames.includes(name)) includeNames.push(name);
+                    });
+                    const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
+                    if (userName && userHintRegex.test(rawPrompt.toLowerCase())) includeNames.push(userName);
+                    const tagResult = buildDirectImagePrompt(rawPrompt, {
+                        includeNames,
+                        contacts: allContactsList,
+                        getAppearanceTagsByName,
+                        tagWeight: settings.tagWeight,
+                    });
+                    const imageUrl = tagResult.finalPrompt ? await generateRoomMessageImageViaApi(tagResult.finalPrompt) : '';
+                    if (imageUrl) {
+                        const safeUrl = escapeHtml(imageUrl);
+                        const safePrompt = escapeHtml(rawPrompt);
+                        const placeholder = `__ROOM_IMG_${imageCounter++}__`;
+                        imagePlaceholders.set(placeholder, `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image" style="max-width:100%;border-radius:var(--slm-image-radius,10px);margin:4px 0">`);
+                        replacement = placeholder;
+                    }
+                }
+                if (!replacement) {
+                    replacement = settings.messageImageTextTemplate.replace(/\{description\}/g, rawPrompt);
+                }
+            }
+            replacements.push({ index: match.index, length: fullTag.length, replacement });
+        }
+        if (replacements.length > 0) {
+            let offset = 0;
+            replacements.forEach(({ index, length, replacement }) => {
+                const adjusted = index + offset;
+                processedText = processedText.slice(0, adjusted) + replacement + processedText.slice(adjusted + length);
+                offset += replacement.length - length;
+            });
+        }
+    }
+    let html = replaceAiSelectedEmoticons(escapeHtml(processedText).replace(/\n/g, '<br>'), senderName);
+    imagePlaceholders.forEach((imageHtml, placeholder) => {
+        html = html.replace(new RegExp(placeholder, 'g'), imageHtml);
+    });
+    const plainText = processedText
+        .replace(/__ROOM_IMG_\d+__/g, ' [사진] ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return {
+        text: plainText || normalizeRoomPromptText(rawText),
+        html: html !== plainText ? html : '',
+    };
+}
+
 function pickRandomResponders(room) {
     const members = Array.isArray(room?.members) ? room.members.filter(Boolean) : [];
     if (members.length === 0) return [];
@@ -270,10 +449,12 @@ function pickRandomResponders(room) {
 async function generateRoomReply(room, responderKey, candidateMap) {
     const ctx = getContext();
     if (!ctx) return '';
+    const imageSettings = getRoomImageSettings();
     const responderName = getMemberDisplayLabel(responderKey, candidateMap);
     const memberLabels = room.members.map((memberKey) => getMemberDisplayLabel(memberKey, candidateMap));
     const transcript = buildRoomTranscript(room, candidateMap);
     const latestUserMessage = normalizeRoomPromptText(room.messages[room.messages.length - 1]?.text || '');
+    const emoticonContext = buildAiEmoticonContext(responderName);
     const rosterText = room.members.map((memberKey) => {
         const candidate = candidateMap.get(memberKey);
         const label = getMemberDisplayLabel(memberKey, candidateMap);
@@ -310,6 +491,10 @@ async function generateRoomReply(room, responderKey, candidateMap) {
         '',
         `[Latest user message]\n${latestUserMessage || '(empty)'}`,
         '',
+        emoticonContext,
+        '',
+        imageSettings.messageImageInjectionPrompt || ROOM_IMAGE_OFF_PROMPT,
+        '',
         `Output only ${responderName}'s next room message.`,
     ].join('\n');
 
@@ -319,7 +504,9 @@ async function generateRoomReply(room, responderKey, candidateMap) {
     } else if (typeof ctx.generateRaw === 'function') {
         rawReply = await ctx.generateRaw({ prompt, quietToLoud: false, trimNames: true });
     }
-    return sanitizeRoomReply(rawReply, responderName, memberLabels);
+    const sanitizedReply = sanitizeRoomReply(rawReply, responderName, memberLabels);
+    if (!sanitizedReply) return '';
+    return enrichRoomReplyContent(sanitizedReply, responderName, room, candidateMap);
 }
 
 async function generateOutsiderObservation(room, candidateMap) {
@@ -362,13 +549,14 @@ async function runRoomAutoReplies(roomId) {
     const candidateMap = getCandidateMap();
     const responders = pickRandomResponders(room);
     for (const responderKey of responders) {
-        const text = await generateRoomReply(room, responderKey, candidateMap);
-        if (!text) continue;
+        const reply = await generateRoomReply(room, responderKey, candidateMap);
+        if (!reply?.text) continue;
         room = appendRoomMessage(room, {
             id: generateId(),
             authorKey: responderKey,
             authorName: getMemberDisplayLabel(responderKey, candidateMap),
-            text,
+            text: reply.text,
+            html: reply.html || '',
             timestamp: Date.now(),
             type: 'message',
         });
@@ -622,7 +810,11 @@ function openMessengerRoomDetail(roomId, onBack) {
             author.textContent = isUser ? String(getContext()?.name1 || '{{user}}') : String(message.authorName || getMemberDisplayLabel(message.authorKey, candidateMap));
             const bubble = document.createElement('div');
             bubble.className = 'slm-room-message-bubble';
-            bubble.textContent = message.text;
+            if (!isUser && message.html) {
+                bubble.innerHTML = message.html;
+            } else {
+                bubble.textContent = message.text;
+            }
             const time = document.createElement('div');
             time.className = 'slm-room-message-time';
             time.textContent = formatRelativeTime(message.timestamp);

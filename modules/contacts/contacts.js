@@ -14,6 +14,7 @@ import { registerContextBuilder } from '../../utils/context-inject.js';
 import { showToast, escapeHtml, generateId } from '../../utils/ui.js';
 import { createPopup } from '../../utils/popup.js';
 import { applyProfileImageStyle, normalizeProfileImageStyle, readImageFileAsDataUrl } from '../../utils/profile-image.js';
+import { getAllEmoticonCategories } from '../emoticon/emoticon.js';
 
 const MODULE_KEY = 'contacts';
 const MAX_AI_CONTACT_KEYWORD_LENGTH = 200;
@@ -59,6 +60,7 @@ const MODEL_KEY_BY_SOURCE = {
  * @property {string} phone
  * @property {string[]} tags
  * @property {string} [appearanceTags] - 외관 태그 (이미지 생성 시 사용)
+ * @property {string[]|null} [emoticonCategories] - AI가 사용할 수 있는 이모티콘 카테고리 (null이면 전체 허용)
  * @property {{ positionX?: number, positionY?: number, scale?: number }} [avatarStyle]
  * @property {'chat'|'character'} binding
  * @property {boolean} [isCharAuto] - {{char}} 자동 추가 여부
@@ -134,6 +136,9 @@ function normalizeContact(contact, binding = 'chat') {
         phone: String(contact.phone || '').trim(),
         tags: Array.isArray(contact.tags) ? contact.tags : [],
         appearanceTags: String(contact.appearanceTags || '').trim(),
+        emoticonCategories: Array.isArray(contact.emoticonCategories)
+            ? [...new Set(contact.emoticonCategories.map((category) => String(category || '').trim()).filter(Boolean))]
+            : null,
         binding: normalizedBinding,
         isCharAuto,
         isUserAuto,
@@ -548,6 +553,7 @@ function buildContactsContent() {
 function openContactDetailPopup(contact) {
     const wrapper = document.createElement('div');
     wrapper.className = 'slm-contact-detail';
+    const emoticonCategories = Array.isArray(contact?.emoticonCategories) ? contact.emoticonCategories : null;
 
     // 아바타
     const avatar = document.createElement('div');
@@ -580,6 +586,7 @@ function openContactDetailPopup(contact) {
         { label: '관계', value: contact.relationToUser },
         { label: '성격/말투', value: contact.personality },
         { label: '외관 태그', value: contact.appearanceTags },
+        { label: 'AI 이모티콘 카테고리', value: emoticonCategories === null ? '전체 허용' : emoticonCategories.join(', ') },
         { label: '단톡 참여', value: contact.groupChatParticipant ? '활성화' : '' },
     ];
 
@@ -635,6 +642,46 @@ function openContactDialog(existing, defaultBinding, onSave) {
     groupParticipantWrap.appendChild(groupParticipantCheck);
     groupParticipantWrap.appendChild(document.createTextNode(' 단톡 자동 응답 참여 가능'));
     fields.appearanceTags.insertAdjacentElement('afterend', groupParticipantWrap);
+
+    const emoticonCategoryLabel = document.createElement('label');
+    emoticonCategoryLabel.className = 'slm-label';
+    emoticonCategoryLabel.textContent = '😊 AI 이모티콘 카테고리';
+    emoticonCategoryLabel.style.marginTop = '8px';
+    const emoticonCategoryDesc = document.createElement('div');
+    emoticonCategoryDesc.className = 'slm-desc';
+    emoticonCategoryDesc.textContent = '체크한 카테고리의 이모티콘만 이 연락처/캐릭터가 AI 응답에서 사용할 수 있습니다. 모두 체크하면 전체 허용으로 저장됩니다.';
+    const emoticonCategoryBox = document.createElement('div');
+    emoticonCategoryBox.className = 'slm-check-list';
+    emoticonCategoryBox.style.display = 'flex';
+    emoticonCategoryBox.style.flexDirection = 'column';
+    emoticonCategoryBox.style.gap = '6px';
+    emoticonCategoryBox.style.marginBottom = '8px';
+    const emoticonCategories = getAllEmoticonCategories();
+    const initialEmoticonCategories = Array.isArray(existing?.emoticonCategories)
+        ? new Set(existing.emoticonCategories)
+        : new Set(emoticonCategories);
+    const emoticonCategoryChecks = [];
+    if (emoticonCategories.length === 0) {
+        const emptyCategoryNote = document.createElement('div');
+        emptyCategoryNote.className = 'slm-desc';
+        emptyCategoryNote.textContent = '등록된 이모티콘 카테고리가 없습니다. 먼저 이모티콘을 추가해 주세요.';
+        emoticonCategoryBox.appendChild(emptyCategoryNote);
+    } else {
+        emoticonCategories.forEach((category) => {
+            const categoryLabel = document.createElement('label');
+            categoryLabel.className = 'slm-toggle-label';
+            categoryLabel.style.fontSize = '13px';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = initialEmoticonCategories.has(category);
+            categoryLabel.append(checkbox, document.createTextNode(` ${category}`));
+            emoticonCategoryChecks.push({ category, checkbox });
+            emoticonCategoryBox.appendChild(categoryLabel);
+        });
+    }
+    groupParticipantWrap.insertAdjacentElement('afterend', emoticonCategoryLabel);
+    emoticonCategoryLabel.insertAdjacentElement('afterend', emoticonCategoryDesc);
+    emoticonCategoryDesc.insertAdjacentElement('afterend', emoticonCategoryBox);
     const initialAvatarStyle = getAvatarStyle(existing, { width: 72, height: 72, scale: 100, positionX: 50, positionY: 50 });
     const avatarActionRow = document.createElement('div');
     avatarActionRow.className = 'slm-input-row';
@@ -840,6 +887,9 @@ function openContactDialog(existing, defaultBinding, onSave) {
             : isCharAuto
                 ? isGroupChatContact(existing)
                 : groupParticipantCheck.checked;
+        const selectedEmoticonCategories = emoticonCategoryChecks
+            .filter(({ checkbox }) => checkbox.checked)
+            .map(({ category }) => category);
         const data = {
             id: existing?.id || generateId(),
             name: canonicalName,
@@ -854,6 +904,9 @@ function openContactDialog(existing, defaultBinding, onSave) {
             phone: '',
             tags: existing?.tags || [],
             appearanceTags: fields.appearanceTags.value.trim(),
+            emoticonCategories: emoticonCategories.length === 0
+                ? null
+                : (selectedEmoticonCategories.length === emoticonCategories.length ? null : selectedEmoticonCategories),
             groupChatParticipant,
             binding: targetBinding,
             isCharAuto,
