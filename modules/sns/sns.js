@@ -283,18 +283,13 @@ function buildSnsDirectImagePromptRequest(sourcePrompt, authorName) {
     ].join('\n');
 }
 
-async function createSnsImagePrompt(ctx, sourcePrompt, authorName, contacts = []) {
+async function createSnsImagePrompt(ctx, sourcePrompt, authorName) {
     if (!ctx) return { sceneTags: '', appearanceGroups: [], finalPrompt: '' };
     const tagWeight = Number(getExtensionSettings()?.['st-lifesim']?.tagWeight) || 0;
     const authorContact = resolveContactProfile(authorName);
     const promptOptions = {
         includeNames: [authorName].filter(Boolean),
-        contacts: authorContact ? [authorContact] : contacts.filter((contact) => {
-            const names = [contact?.name, contact?.displayName, contact?.subName]
-                .map(value => String(value || '').trim().toLowerCase())
-                .filter(Boolean);
-            return names.includes(String(authorName || '').trim().toLowerCase());
-        }),
+        contacts: authorContact ? [authorContact] : [],
         getAppearanceTagsByName,
         tagWeight,
     };
@@ -312,8 +307,7 @@ async function createSnsImagePrompt(ctx, sourcePrompt, authorName, contacts = []
 async function applyGeneratedImageToPost(postId, { promptSource, authorName, fallbackImageUrl = '', onUpdate } = {}) {
     const ctx = getContext();
     if (!ctx) return false;
-    const contacts = [...getContacts('character'), ...getContacts('chat')];
-    const promptResult = await createSnsImagePrompt(ctx, promptSource, authorName, contacts);
+    const promptResult = await createSnsImagePrompt(ctx, promptSource, authorName);
     if (!promptResult.finalPrompt) return false;
     const generatedUrl = await generateImageViaApi(promptResult.finalPrompt);
     const feed = loadFeed();
