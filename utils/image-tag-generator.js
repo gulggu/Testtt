@@ -581,11 +581,18 @@ export async function generateImageTags(rawPrompt, options = {}) {
     }
 
     // Extract scene tags and appearance blocks from the AI output.
-    // The AI may include [Name: appearance] blocks in its output — separate them.
+    // The AI may include [Name: appearance] blocks or Character N: (tags) pipe blocks.
     const appearanceBlockRegex = /\[[^\]]+:[^\]]+\]/g;
+    const pipeCharBlockRegex = /Character\s+\d+:\s*\([^)]+\)/gi;
     const aiAppearanceBlocks = sceneTags.match(appearanceBlockRegex) || [];
+    const aiPipeBlocks = sceneTags.match(pipeCharBlockRegex) || [];
+    const allAiBlocks = [
+        ...aiAppearanceBlocks.map(b => b.slice(1, -1).trim()),
+        ...aiPipeBlocks.map(b => b.replace(/\(([^)]+)\)/, '$1').trim()),
+    ].filter(Boolean);
     const sceneOnly = sceneTags
         .replace(appearanceBlockRegex, '')  // Remove [Name: appearance] blocks
+        .replace(pipeCharBlockRegex, '')    // Remove Character N: (tags) blocks
         .replace(/\|/g, ',')               // 파이프를 쉼표로 변환
         .split(',')
         .map(s => s.trim())
@@ -596,12 +603,12 @@ export async function generateImageTags(rawPrompt, options = {}) {
     // Prefer AI-selected appearance blocks; fall back to all matched characters
     const matchedAppearanceGroups = buildMatchedAppearanceGroups(matched);
     let appearanceGroups = matchedAppearanceGroups;
-    if (appearanceGroups.length === 0 && aiAppearanceBlocks.length > 0) {
-        appearanceGroups = mergeAppearanceGroupsWithMatched(aiAppearanceBlocks.map(b => b.slice(1, -1).trim()).filter(Boolean), matched);
+    if (appearanceGroups.length === 0 && allAiBlocks.length > 0) {
+        appearanceGroups = mergeAppearanceGroupsWithMatched(allAiBlocks, matched);
     }
 
     // ── Step 4: Build final prompt ──
-    // Result: "weight::scene tags::, [name1: appearance1], [name2: appearance2]"
+    // Result: "scene tags | Character 1: (appearance1) | Character 2: (appearance2)"
     const filteredSceneTags = stripAppearanceTagsFromScene(sceneOnly, appearanceGroups);
     const finalPrompt = buildImageApiPrompt(filteredSceneTags, appearanceGroups, { tagWeight });
 
@@ -694,12 +701,12 @@ function safeTags(tags) {
 }
 
 /**
- * Validate an appearance group string ("Name: tags") for the Image API.
+ * Validate an appearance group string ("Character N: tags") for the Image API.
  * Korean is allowed in the Name portion (character names may be Korean),
  * but the actual tags after the colon must be Korean-free.
  * Falls back to safeTags() if no "Name: tags" format is detected.
  *
- * @param {string} group - Appearance group string, e.g. "민지: long hair, blue eyes"
+ * @param {string} group - Appearance group string, e.g. "Character 1: long hair, blue eyes"
  * @returns {string} The cleaned group string, or '' if invalid
  */
 function safeAppearanceGroup(group) {
