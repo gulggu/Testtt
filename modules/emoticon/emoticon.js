@@ -17,6 +17,7 @@ import { isCallActive } from '../call/call.js';
 import { getContext } from '../../utils/st-context.js';
 
 const GLOBAL_BINDING = 'global';
+const CONTACTS_MODULE_KEY = 'contacts';
 
 /**
  * 이모티콘 출력 크기를 가져온다 (extension_settings에서)
@@ -40,6 +41,7 @@ const MODULE_KEY = 'emoticons';
 const CATEGORY_AI_KEY = 'emoticon-category-ai';
 const CHAR_CATEGORY_AI_KEY = 'emoticon-char-category-ai';
 const CATEGORY_VISIBILITY_KEY = 'emoticon-category-visibility';
+const EMOTICON_HINT_TEXT_TEMPLATE = '{charName} 기준으로 AI 사용 가능 카테고리가 적용됩니다. 탭으로 카테고리를 전환하고, 길게/우클릭으로 편집 메뉴를 열 수 있습니다.';
 // 지원 형식:
 // - [[emoticon:이름]]
 // - <emoticon:이름>
@@ -53,7 +55,6 @@ const AI_EMOTICON_BULLET_LINE_REGEX = /^[•*-]\s+(.+)$/;
  * @property {string} url
  * @property {string} category
  * @property {boolean} favorite
- * @property {boolean} aiUsable - AI도 사용 가능한지 여부
  */
 
 /**
@@ -126,24 +127,43 @@ function saveCategoryVisibilityMap(map) {
     saveData(CATEGORY_VISIBILITY_KEY, map, GLOBAL_BINDING);
 }
 
-function isAiUsableByPolicy(emoticon, categoryAiMap, charCategoryAiMap) {
-    if (emoticon.aiOverrideAllow) return true;
-    // Per-character category setting takes priority (default: not allowed)
-    if (charCategoryAiMap && emoticon.category in charCategoryAiMap) {
-        return charCategoryAiMap[emoticon.category] && emoticon.aiUsable !== false;
-    }
-    // If no per-character setting exists, default to not allowed
-    if (charCategoryAiMap) return false;
-    // Legacy global fallback
-    if (categoryAiMap?.[emoticon.category] === false) return false;
-    return emoticon.aiUsable !== false;
+function normalizeAllowedCategoryList(categories) {
+    if (!Array.isArray(categories)) return null;
+    return [...new Set(categories.map((category) => String(category || '').trim()).filter(Boolean))];
 }
 
-function getAiUsableEmoticons() {
+function loadContactsForEmoticonPolicy() {
+    return [
+        ...loadData(CONTACTS_MODULE_KEY, [], 'character'),
+        ...loadData(CONTACTS_MODULE_KEY, [], 'chat'),
+    ].filter((contact) => contact && typeof contact === 'object');
+}
+
+function resolveAllowedCategoriesForSender(senderName) {
+    const requested = String(senderName || '').trim().toLowerCase();
+    if (!requested) return null;
+    const contact = loadContactsForEmoticonPolicy().find((entry) => [entry?.name, entry?.displayName, entry?.subName]
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter(Boolean)
+        .includes(requested));
+    return normalizeAllowedCategoryList(contact?.emoticonCategories);
+}
+
+function isAiUsableByPolicy(emoticon, allowedCategories) {
+    const category = String(emoticon?.category || '').trim();
+    if (!category) return false;
+    if (allowedCategories === null) return true;
+    return allowedCategories.includes(category);
+}
+
+function getAiUsableEmoticons(senderName = getCurrentCharName()) {
     const emoticons = loadEmoticons();
-    const categoryAiMap = loadCategoryAiMap();
-    const charCategoryAiMap = loadCharCategoryAiMap();
-    return emoticons.filter(e => isAiUsableByPolicy(e, categoryAiMap, charCategoryAiMap));
+    const allowedCategories = resolveAllowedCategoriesForSender(senderName);
+    return emoticons.filter((emoticon) => isAiUsableByPolicy(emoticon, allowedCategories));
+}
+
+export function getAllEmoticonCategories() {
+    return [...new Set(loadEmoticons().map((emoticon) => String(emoticon?.category || '').trim()).filter(Boolean))];
 }
 
 function buildEmoticonHtml(emoticon, senderName) {
@@ -170,7 +190,7 @@ function isSafeEmoticonTokenName(value) {
 
 function resolveAiEmoticonHtmlMap(senderName) {
     const htmlMap = new Map();
-    getAiUsableEmoticons().forEach((emoticon) => {
+    getAiUsableEmoticons(senderName).forEach((emoticon) => {
         const normalizedName = normalizeEmoticonName(emoticon.name).toLowerCase();
         if (!normalizedName || htmlMap.has(normalizedName)) return;
         htmlMap.set(normalizedName, buildEmoticonHtml(emoticon, senderName));
@@ -223,6 +243,26 @@ export function replaceAiSelectedEmoticons(text, senderName = '{{char}}') {
     return replaced;
 }
 
+export function buildAiEmoticonContext(senderName = getCurrentCharName()) {
+    const aiEmoticons = getAiUsableEmoticons(senderName);
+    if (aiEmoticons.length === 0) return '';
+    const list = [...new Set(aiEmoticons
+        .map((emoticon) => normalizeEmoticonName(emoticon.name))
+        .filter(Boolean))]
+        .map((name) => `• ${name}`)
+        .join('\n');
+    return [
+        '<당신이 사용할 수 있는 이모티콘 목록입니다>',
+        '<Available emoticons you can use>',
+        list,
+        '',
+        '이모티콘을 보내고 싶다면 위 목록에서 정확히 하나를 골라 [[emoticon:이름]] 형식으로만 출력하세요.',
+        'If you want to send one, choose exactly one name from the list and output only [[emoticon:NAME]].',
+        '이모티콘용 HTML, 이미지 URL, markdown, 설명은 직접 출력하지 마세요.',
+        'Do not output emoticon HTML, image URLs, markdown, or explanations directly.',
+    ].join('\n');
+}
+
 /**
  * 이모티콘 모듈을 초기화한다
  */
@@ -231,24 +271,7 @@ export function initEmoticon() {
     registerContextBuilder('emoticon', () => {
         // 통화 중에는 이모티콘 컨텍스트 주입 안 함
         if (isCallActive()) return null;
-
-        const aiEmoticons = getAiUsableEmoticons();
-        if (aiEmoticons.length === 0) return null;
-        const list = [...new Set(aiEmoticons
-            .map(e => normalizeEmoticonName(e.name))
-            .filter(Boolean))]
-            .map(name => `• ${name}`)
-            .join('\n');
-        return [
-            '<당신이 사용할 수 있는 이모티콘 목록입니다>',
-            '<Available emoticons you can use>',
-            list,
-            '',
-            '이모티콘을 보내고 싶다면 위 목록에서 정확히 하나를 골라 [[emoticon:이름]] 형식으로만 출력하세요.',
-            'If you want to send one, choose exactly one name from the list and output only [[emoticon:NAME]].',
-            '이모티콘용 HTML, 이미지 URL, markdown, 설명은 직접 출력하지 마세요.',
-            'Do not output emoticon HTML, image URLs, markdown, or explanations directly.',
-        ].join('\n');
+        return buildAiEmoticonContext(getCurrentCharName()) || null;
     });
 }
 
@@ -292,6 +315,12 @@ function buildEmoticonContent() {
         renderGrid();
     };
     wrapper.appendChild(searchInput);
+
+    const currentCharName = getCurrentCharName();
+    const helperCard = document.createElement('div');
+    helperCard.className = 'slm-phone-hint-card slm-emoticon-hint';
+    helperCard.textContent = EMOTICON_HINT_TEXT_TEMPLATE.replace('{charName}', currentCharName || '현재 캐릭터');
+    wrapper.appendChild(helperCard);
 
     // 카테고리 탭바
     const tabBar = document.createElement('div');
@@ -348,8 +377,6 @@ function buildEmoticonContent() {
                             url: em.url,
                             category: em.category || '기본',
                             favorite: false,
-                            aiUsable: em.aiUsable !== false,
-                            aiOverrideAllow: em.aiOverrideAllow === true,
                         });
                         added++;
                     }
@@ -483,33 +510,11 @@ function buildEmoticonContent() {
         }
 
         if (currentCategory === '전체' || currentCategory === '즐겨찾기') return;
-
-        // 캐릭터별 카테고리 이모티콘 허용 설정 (character 바인딩 → 채팅을 새로 파도 유지)
-        const charName = getCurrentCharName();
-        const charCategoryAiMap = loadCharCategoryAiMap();
-        const charLbl = document.createElement('label');
-        charLbl.className = 'slm-toggle-label';
-        charLbl.style.fontSize = '12px';
-        const charChk = document.createElement('input');
-        charChk.type = 'checkbox';
-        charChk.checked = charCategoryAiMap[currentCategory] === true;
-        charChk.onchange = () => {
-            const nextMap = loadCharCategoryAiMap();
-            nextMap[currentCategory] = charChk.checked;
-            saveCharCategoryAiMap(nextMap);
-            renderGrid();
-        };
-        charLbl.appendChild(charChk);
-        // 한국어 조사: 이름 끝이 받침으로 끝나면 '이', 아니면 '가'
-        const lastChar = charName ? charName[charName.length - 1] : '';
-        const charCode = lastChar ? lastChar.charCodeAt(0) : 0;
-        const hasJongseong = charCode >= 0xAC00 && charCode <= 0xD7A3
-            && (charCode - 0xAC00) % 28 !== 0;
-        const particle = hasJongseong ? '이' : '가';
-        charLbl.appendChild(document.createTextNode(
-            ` ${charName || '캐릭터'}${particle} 이 카테고리의 이모티콘을 사용하도록 허용`
-        ));
-        categoryAiRow.appendChild(charLbl);
+        const note = document.createElement('div');
+        note.className = 'slm-desc';
+        note.style.margin = '4px 0 0';
+        note.textContent = 'AI 이모티콘 허용은 이제 카테고리 단위만 지원합니다. 각 연락처 편집 화면에서 사용 가능한 카테고리를 설정하세요.';
+        categoryAiRow.appendChild(note);
     }
 
     // 카테고리 탭 렌더링
@@ -556,10 +561,9 @@ function buildEmoticonContent() {
             return;
         }
 
-        const categoryAiMap = loadCategoryAiMap();
-        const charCategoryAiMap = loadCharCategoryAiMap();
+        const allowedCategories = resolveAllowedCategoriesForSender(getCurrentCharName());
         filtered.forEach(e => {
-            const aiUsable = isAiUsableByPolicy(e, categoryAiMap, charCategoryAiMap);
+            const aiUsable = isAiUsableByPolicy(e, allowedCategories);
             const cell = document.createElement('div');
             cell.className = 'slm-emoticon-cell';
             cell.title = `${e.name}${aiUsable ? '' : ' 🔒'}`;
@@ -728,47 +732,6 @@ function openAddEmoticonDialog(onSave, existing = null) {
     wrapper.appendChild(catSelect);
     wrapper.appendChild(catInput);
 
-    // AI 사용 여부
-    const aiRow = document.createElement('div');
-    aiRow.className = 'slm-radio-row';
-    const aiLabel = document.createElement('span');
-    aiLabel.className = 'slm-label';
-    aiLabel.textContent = 'AI 사용:';
-
-    const radioYes = document.createElement('input');
-    radioYes.type = 'radio';
-    radioYes.name = 'slm-ai-usable';
-    radioYes.value = 'yes';
-    radioYes.checked = existing ? existing.aiUsable : true;
-
-    const radioYesLabel = document.createElement('label');
-    radioYesLabel.textContent = '가능';
-
-    const radioNo = document.createElement('input');
-    radioNo.type = 'radio';
-    radioNo.name = 'slm-ai-usable';
-    radioNo.value = 'no';
-    radioNo.checked = existing ? !existing.aiUsable : false;
-
-    const radioNoLabel = document.createElement('label');
-    radioNoLabel.textContent = '불가';
-
-    aiRow.appendChild(aiLabel);
-    aiRow.appendChild(radioYes);
-    aiRow.appendChild(radioYesLabel);
-    aiRow.appendChild(radioNo);
-    aiRow.appendChild(radioNoLabel);
-    wrapper.appendChild(aiRow);
-
-    const overrideLabel = document.createElement('label');
-    overrideLabel.className = 'slm-toggle-label';
-    const overrideCheck = document.createElement('input');
-    overrideCheck.type = 'checkbox';
-    overrideCheck.checked = !!existing?.aiOverrideAllow;
-    overrideLabel.appendChild(overrideCheck);
-    overrideLabel.appendChild(document.createTextNode(' 카테고리 설정과 무관하게 AI 사용 허용'));
-    wrapper.appendChild(overrideLabel);
-
     // footer 버튼 생성 후 createPopup에 전달
     const footer = document.createElement('div');
     footer.className = 'slm-panel-footer';
@@ -800,8 +763,6 @@ function openAddEmoticonDialog(onSave, existing = null) {
         const category = (catSelect.value === directInputOptionValue
             ? catInput.value.trim()
             : catSelect.value.trim()) || '기본';
-        const aiUsable = radioYes.checked;
-        const aiOverrideAllow = overrideCheck.checked;
 
         if (!name || !url) {
             showToast('이름과 URL을 입력해주세요.', 'warn');
@@ -812,15 +773,13 @@ function openAddEmoticonDialog(onSave, existing = null) {
         if (isEdit) {
             const idx = emoticons.findIndex(e => e.id === existing.id);
             if (idx !== -1) {
-                emoticons[idx] = { ...existing, name, url, category, aiUsable, aiOverrideAllow };
+                emoticons[idx] = { ...existing, name, url, category };
             }
         } else {
             emoticons.push({
                 id: generateId(),
                 name, url, category,
                 favorite: false,
-                aiUsable,
-                aiOverrideAllow,
             });
         }
         saveEmoticons(emoticons);
@@ -990,8 +949,6 @@ function openBulkAddDialog(onSave) {
                 url,
                 category,
                 favorite: false,
-                aiUsable: true,
-                aiOverrideAllow: false,
             });
             existingUrls.add(url);
             added++;

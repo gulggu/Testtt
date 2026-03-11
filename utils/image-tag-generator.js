@@ -125,6 +125,7 @@ function buildCharacterAwarePrompt(characters, appearanceVarMap, additionalPromp
         '14) Always include at least one framing tag and one setting tag.',
         '15) Character appearance tags in the final prompt MUST be wrapped in square brackets with the format [Name: appearance tags].',
         '16) Only include characters that are relevant to the described scene.',
+        '17) If you include a character, do not omit their core appearance tags such as hair, eyes, signature outfit/clothing, or other defining visual traits from the character\'s provided appearance data.',
         '',
         'EXAMPLE:',
         '* Input: "Alice and Bob go to cafe"',
@@ -479,7 +480,7 @@ export function buildDirectImagePrompt(rawPrompt, options = {}) {
         .map(s => s.trim().replace(/^[`"'“”‘’]+|[`"'“”‘’]+$/g, '').replace(/[.!?]+$/g, ''))
         .filter(Boolean)
         .join(', ');
-    const appearanceGroups = (promptAppearanceBlocks.length > 0
+    const appearanceGroups = mergeAppearanceGroupsWithMatched(promptAppearanceBlocks.length > 0
         ? promptAppearanceBlocks.map(b => b.slice(1, -1).trim()).filter(Boolean)
         : matched
             .map(c => {
@@ -488,7 +489,7 @@ export function buildDirectImagePrompt(rawPrompt, options = {}) {
                 if (!name || !tags) return '';
                 return `${name}: ${tags}`;
             })
-            .filter(Boolean));
+            .filter(Boolean), matched);
     const filteredSceneTags = stripAppearanceTagsFromScene(sceneOnly, appearanceGroups);
     const finalPrompt = buildImageApiPrompt(filteredSceneTags, appearanceGroups, { tagWeight });
     if (!finalPrompt && appearanceGroups.length === 0) return emptyResult;
@@ -549,14 +550,14 @@ export async function generateImageTags(rawPrompt, options = {}) {
 
     // ── Step 2b: If scene tag generation failed, collect appearance tags as fallback ──
     if (!sceneTags) {
-        const fallbackAppearance = matched
+        const fallbackAppearance = mergeAppearanceGroupsWithMatched(matched
             .map(c => {
                 const name = String(c?.name || '').trim();
                 const tags = String(c?.appearanceTags || '').trim();
                 if (!name || !tags) return '';
                 return `${name}: ${tags}`;
             })
-            .filter(Boolean);
+            .filter(Boolean), matched);
         if (fallbackAppearance.length > 0) {
             const fallbackPrompt = buildImageApiPrompt('', fallbackAppearance, { tagWeight });
             return { sceneTags: '', appearanceGroups: fallbackAppearance, finalPrompt: fallbackPrompt };
@@ -581,18 +582,18 @@ export async function generateImageTags(rawPrompt, options = {}) {
     let appearanceGroups;
     if (aiAppearanceBlocks.length > 0) {
         // AI selected characters — use its output directly (strip outer brackets for buildImageApiPrompt)
-        appearanceGroups = aiAppearanceBlocks.map(b => b.slice(1, -1).trim()).filter(Boolean);
+        appearanceGroups = mergeAppearanceGroupsWithMatched(aiAppearanceBlocks.map(b => b.slice(1, -1).trim()).filter(Boolean), matched);
     } else {
         // AI didn't include appearance blocks — fall back to matched characters
         // Format: "name: tags" (buildImageApiPrompt will wrap these in [])
-        appearanceGroups = matched
+        appearanceGroups = mergeAppearanceGroupsWithMatched(matched
             .map(c => {
                 const name = String(c?.name || '').trim();
                 const tags = String(c?.appearanceTags || '').trim();
                 if (!name || !tags) return '';
                 return `${name}: ${tags}`;
             })
-            .filter(Boolean);
+            .filter(Boolean), matched);
     }
 
     // ── Step 4: Build final prompt ──
@@ -714,6 +715,89 @@ function safeAppearanceGroup(group) {
     }
     // No "Name:" format — apply full Korean check
     return safeTags(trimmed);
+}
+
+/**
+ * Parses an appearance group like "Name: tag1, tag2" into a structured name/tags pair.
+ * @param {string} group
+ * @returns {{ name: string, tags: string[] }}
+ */
+function parseAppearanceGroup(group) {
+    const trimmed = String(group || '').trim();
+    if (!trimmed) return { name: '', tags: [] };
+    const colonIdx = trimmed.indexOf(':');
+    if (colonIdx < 0) {
+        return { name: '', tags: splitTags(trimmed) };
+    }
+    return {
+        name: trimmed.substring(0, colonIdx).trim(),
+        tags: splitTags(trimmed.substring(colonIdx + 1)),
+    };
+}
+
+/**
+ * Builds a short list of core appearance tags, prioritizing visual identity tags first.
+ * Priority order: tags matching APPEARANCE_TAG_PATTERN, then the first 4 original tags, capped at 8.
+ * @param {string} tagsText
+ * @returns {string[]}
+ */
+function buildCoreAppearanceTags(tagsText) {
+    const tags = splitTags(tagsText);
+    const prioritized = [];
+    const pushUnique = (tag) => {
+        const normalized = normalizeTagText(tag);
+        if (!normalized) return;
+        if (prioritized.some(existing => existing.toLowerCase() === normalized.toLowerCase())) return;
+        prioritized.push(normalized);
+    };
+    tags.filter(tag => APPEARANCE_TAG_PATTERN.test(tag)).forEach(pushUnique);
+    tags.slice(0, 4).forEach(pushUnique);
+    return prioritized.slice(0, 8);
+}
+
+/**
+ * Adds any missing core appearance tags from the source appearance string to an existing group.
+ * @param {string} group
+ * @param {string} sourceAppearanceTags
+ * @returns {string}
+ */
+function mergeAppearanceGroupWithCore(group, sourceAppearanceTags) {
+    const { name, tags } = parseAppearanceGroup(group);
+    if (!name) return safeAppearanceGroup(group);
+    const merged = [...tags];
+    const existingLower = new Set(tags.map(tag => tag.toLowerCase()));
+    buildCoreAppearanceTags(sourceAppearanceTags).forEach((tag) => {
+        if (existingLower.has(tag.toLowerCase())) return;
+        merged.push(tag);
+        existingLower.add(tag.toLowerCase());
+    });
+    return safeAppearanceGroup(`${name}: ${merged.join(', ')}`);
+}
+
+/**
+ * Enriches appearance groups with missing core tags from matched contact appearance data.
+ * @param {string[]} [appearanceGroups]
+ * @param {Array<{name?: string, appearanceTags?: string}>} [matched]
+ * @returns {string[]}
+ */
+function mergeAppearanceGroupsWithMatched(appearanceGroups = [], matched = []) {
+    if (!Array.isArray(appearanceGroups) || appearanceGroups.length === 0) return [];
+    if (!Array.isArray(matched) || matched.length === 0) {
+        return appearanceGroups.map(group => safeAppearanceGroup(group)).filter(Boolean);
+    }
+    const matchedMap = new Map();
+    matched.forEach((entry) => {
+        const name = String(entry?.name || '').trim().toLowerCase();
+        if (!name) return;
+        matchedMap.set(name, String(entry?.appearanceTags || '').trim());
+    });
+    return appearanceGroups
+        .map((group) => {
+            const { name } = parseAppearanceGroup(group);
+            const sourceTags = matchedMap.get(String(name || '').trim().toLowerCase()) || '';
+            return sourceTags ? mergeAppearanceGroupWithCore(group, sourceTags) : safeAppearanceGroup(group);
+        })
+        .filter(Boolean);
 }
 
 const APPEARANCE_TAG_KEYWORDS = [

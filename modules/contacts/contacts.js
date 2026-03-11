@@ -12,11 +12,13 @@ import { getContext } from '../../utils/st-context.js';
 import { loadData, saveData, getExtensionSettings } from '../../utils/storage.js';
 import { registerContextBuilder } from '../../utils/context-inject.js';
 import { showToast, escapeHtml, generateId } from '../../utils/ui.js';
-import { createPopup } from '../../utils/popup.js';
+import { createPopup, closePopup } from '../../utils/popup.js';
 import { applyProfileImageStyle, normalizeProfileImageStyle, readImageFileAsDataUrl } from '../../utils/profile-image.js';
+import { getAllEmoticonCategories } from '../emoticon/emoticon.js';
 
 const MODULE_KEY = 'contacts';
 const MAX_AI_CONTACT_KEYWORD_LENGTH = 200;
+const LEGACY_CONTACT_ID_FIELDS = ['name', 'displayName', 'subName'];
 const MODEL_KEY_BY_SOURCE = {
     openai: 'openai_model',
     claude: 'claude_model',
@@ -58,6 +60,7 @@ const MODEL_KEY_BY_SOURCE = {
  * @property {string} phone
  * @property {string[]} tags
  * @property {string} [appearanceTags] - 외관 태그 (이미지 생성 시 사용)
+ * @property {string[]|null} [emoticonCategories] - AI가 사용할 수 있는 이모티콘 카테고리 (null이면 전체 허용)
  * @property {{ positionX?: number, positionY?: number, scale?: number }} [avatarStyle]
  * @property {'chat'|'character'} binding
  * @property {boolean} [isCharAuto] - {{char}} 자동 추가 여부
@@ -66,12 +69,89 @@ const MODEL_KEY_BY_SOURCE = {
  */
 
 /**
- * 저장된 연락처 목록을 불러온다
+ * Generates a stable fallback id for legacy contact data that lacks an id field.
+ * @param {Partial<Contact>} contact
  * @param {'chat'|'character'} binding
- * @returns {Contact[]}
+ * @returns {string}
  */
+function buildLegacyContactId(contact, binding) {
+    if (!contact || typeof contact !== 'object') {
+        return `legacy:${binding}:invalid-object`;
+    }
+    const seed = [
+        binding,
+        ...LEGACY_CONTACT_ID_FIELDS.map((field) => encodeURIComponent(String(contact?.[field] || '').trim().toLowerCase())),
+    ].join(':');
+    return `legacy:${seed}`;
+}
+
+/**
+ * Evaluates raw group-chat eligibility flags before a full contact object exists.
+ * @param {boolean} groupChatParticipant
+ * @param {boolean} isUserAuto
+ * @param {boolean} isCharAuto
+ * @returns {boolean}
+ */
+function hasGroupChatEligibility(groupChatParticipant, isUserAuto, isCharAuto) {
+    return groupChatParticipant === true && !isUserAuto && !isCharAuto;
+}
+
+/**
+ * Determines whether a contact can participate in group-chat auto replies.
+ * Excludes auto-generated {{user}}/{{char}} contacts.
+ * @param {Partial<Contact>} contact
+ * @returns {boolean}
+ */
+function isGroupChatContact(contact) {
+    return hasGroupChatEligibility(
+        contact?.groupChatParticipant === true,
+        contact?.isUserAuto === true,
+        contact?.isCharAuto === true,
+    );
+}
+
+/**
+ * Normalizes contact data into a consistent structure for the current binding.
+ * Returns null for invalid input.
+ * @param {Partial<Contact>} contact
+ * @param {'chat'|'character'} binding
+ * @returns {Contact|null}
+ */
+function normalizeContact(contact, binding = 'chat') {
+    if (!contact || typeof contact !== 'object') return null;
+    const normalizedBinding = binding === 'character' ? 'character' : 'chat';
+    const isCharAuto = contact.isCharAuto === true;
+    const isUserAuto = contact.isUserAuto === true;
+    return {
+        ...contact,
+        id: String(contact.id || '').trim() || buildLegacyContactId(contact, normalizedBinding),
+        name: String(contact.name || '').trim(),
+        displayName: String(contact.displayName || '').trim(),
+        subName: String(contact.subName || '').trim(),
+        avatar: String(contact.avatar || '').trim(),
+        description: String(contact.description || '').trim(),
+        relationToUser: String(contact.relationToUser || '').trim(),
+        relationToChar: String(contact.relationToChar || '').trim(),
+        personality: String(contact.personality || '').trim(),
+        phone: String(contact.phone || '').trim(),
+        tags: Array.isArray(contact.tags) ? contact.tags : [],
+        appearanceTags: String(contact.appearanceTags || '').trim(),
+        emoticonCategories: Array.isArray(contact.emoticonCategories)
+            ? [...new Set(contact.emoticonCategories.map((category) => String(category || '').trim()).filter(Boolean))]
+            : null,
+        binding: normalizedBinding,
+        isCharAuto,
+        isUserAuto,
+        groupChatParticipant: hasGroupChatEligibility(contact.groupChatParticipant === true, isUserAuto, isCharAuto),
+    };
+}
+
 function loadContacts(binding = 'chat') {
-    return loadData(MODULE_KEY, [], binding);
+    const contacts = loadData(MODULE_KEY, [], binding);
+    if (!Array.isArray(contacts)) return [];
+    return contacts
+        .map((contact) => normalizeContact(contact, binding))
+        .filter((contact) => contact && contact.name);
 }
 
 /**
@@ -80,7 +160,12 @@ function loadContacts(binding = 'chat') {
  * @param {'chat'|'character'} binding
  */
 function saveContacts(contacts, binding = 'chat') {
-    saveData(MODULE_KEY, contacts, binding);
+    const normalizedContacts = Array.isArray(contacts)
+        ? contacts
+            .map((contact) => normalizeContact(contact, binding))
+            .filter((contact) => contact && contact.name)
+        : [];
+    saveData(MODULE_KEY, normalizedContacts, binding);
 }
 
 function getAvatarStyle(contact, defaults) {
@@ -171,6 +256,7 @@ function ensureCharContact() {
         tags: [],
         binding: 'character',
         isCharAuto: true,
+        groupChatParticipant: false,
     });
     saveContacts(contacts, 'character');
 }
@@ -203,6 +289,7 @@ function ensureUserContact() {
         }
         existing.isUserAuto = true;
         existing.binding = 'character';
+        existing.groupChatParticipant = false;
         saveContacts(contacts, 'character');
         return;
     }
@@ -222,6 +309,7 @@ function ensureUserContact() {
         appearanceTags: globalProfile.appearanceTags || '',
         binding: 'character',
         isUserAuto: true,
+        groupChatParticipant: false,
     });
     saveContacts(contacts, 'character');
 }
@@ -249,7 +337,7 @@ export function initContacts() {
             return line;
         });
 
-        const groupParticipants = all.filter((contact) => contact?.groupChatParticipant && !contact?.isUserAuto);
+        const groupParticipants = all.filter(isGroupChatContact);
         const groupLines = groupParticipants.map((contact) => {
             let line = `• ${getContactDisplayName(contact)}`;
             if (contact.relationToUser) line += ` | Relation to {{user}}: ${contact.relationToUser}`;
@@ -318,21 +406,22 @@ function buildContactsContent() {
     const actionRow = document.createElement('div');
     actionRow.className = 'slm-btn-row';
     actionRow.style.marginBottom = '8px';
-    const addBtn = document.createElement('button');
-    addBtn.className = 'slm-btn slm-btn-primary slm-btn-sm';
-    addBtn.textContent = '+ 새 연락처';
-    addBtn.onclick = () => openContactDialog(null, 'chat', renderList);
-    const aiAddBtn = document.createElement('button');
-    aiAddBtn.className = 'slm-btn slm-btn-secondary slm-btn-sm';
-    aiAddBtn.textContent = '🤖 AI 생성';
-    aiAddBtn.onclick = () => openAiContactDialog('chat', renderList);
-    const refreshBtn = document.createElement('button');
-    refreshBtn.className = 'slm-btn slm-btn-secondary slm-btn-sm';
-    refreshBtn.textContent = '🔄 갱신';
-    refreshBtn.onclick = () => {
+    const syncAndRenderList = () => {
         refreshAutoContacts();
         renderList();
     };
+    const addBtn = document.createElement('button');
+    addBtn.className = 'slm-btn slm-btn-primary slm-btn-sm';
+    addBtn.textContent = '+ 새 연락처';
+    addBtn.onclick = () => openContactDialog(null, 'chat', syncAndRenderList);
+    const aiAddBtn = document.createElement('button');
+    aiAddBtn.className = 'slm-btn slm-btn-secondary slm-btn-sm';
+    aiAddBtn.textContent = '🤖 AI 생성';
+    aiAddBtn.onclick = () => openAiContactDialog('chat', syncAndRenderList);
+    const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'slm-btn slm-btn-secondary slm-btn-sm';
+    refreshBtn.textContent = '🔄 갱신';
+    refreshBtn.onclick = () => syncAndRenderList();
     actionRow.appendChild(addBtn);
     actionRow.appendChild(aiAddBtn);
     actionRow.appendChild(refreshBtn);
@@ -429,7 +518,7 @@ function buildContactsContent() {
             const editBtn = document.createElement('button');
             editBtn.className = 'slm-btn slm-btn-ghost slm-btn-sm';
             editBtn.textContent = '편집';
-            editBtn.onclick = (e) => { e.stopPropagation(); openContactDialog(contact, contact.binding || 'chat', renderList); };
+            editBtn.onclick = (e) => { e.stopPropagation(); openContactDialog(contact, contact.binding || 'chat', syncAndRenderList); };
 
             // 삭제 버튼
             const delBtn = document.createElement('button');
@@ -440,7 +529,7 @@ function buildContactsContent() {
                 const targetBinding = contact.binding || 'chat';
                 const updated = loadContacts(targetBinding).filter(c => c.id !== contact.id);
                 saveContacts(updated, targetBinding);
-                renderList();
+                syncAndRenderList();
                 showToast('연락처 삭제', 'success', 1500);
             };
 
@@ -453,7 +542,7 @@ function buildContactsContent() {
         });
     }
 
-    renderList();
+    syncAndRenderList();
     return wrapper;
 }
 
@@ -464,6 +553,7 @@ function buildContactsContent() {
 function openContactDetailPopup(contact) {
     const wrapper = document.createElement('div');
     wrapper.className = 'slm-contact-detail';
+    const emoticonCategories = Array.isArray(contact?.emoticonCategories) ? contact.emoticonCategories : null;
 
     // 아바타
     const avatar = document.createElement('div');
@@ -496,6 +586,7 @@ function openContactDetailPopup(contact) {
         { label: '관계', value: contact.relationToUser },
         { label: '성격/말투', value: contact.personality },
         { label: '외관 태그', value: contact.appearanceTags },
+        { label: 'AI 이모티콘 카테고리', value: emoticonCategories === null ? '전체 허용' : emoticonCategories.join(', ') },
         { label: '단톡 참여', value: contact.groupChatParticipant ? '활성화' : '' },
     ];
 
@@ -512,10 +603,40 @@ function openContactDetailPopup(contact) {
 
     wrapper.appendChild(fields);
 
+    const footer = document.createElement('div');
+    footer.className = 'slm-panel-footer';
+    const editBtn = document.createElement('button');
+    editBtn.className = 'slm-btn slm-btn-secondary';
+    editBtn.textContent = '편집';
+    editBtn.onclick = () => {
+        closePopup('contact-detail');
+        openContactDialog(contact, contact.binding || 'chat', () => {
+            openContactsPopup();
+        });
+    };
+    footer.appendChild(editBtn);
+    if (!contact?.isUserAuto && !contact?.isCharAuto) {
+        const dmBtn = document.createElement('button');
+        dmBtn.className = 'slm-btn slm-btn-primary';
+        dmBtn.textContent = '💬 NPC 1:1 메신저';
+        dmBtn.onclick = async () => {
+            try {
+                const roomModule = await import('../messenger-room/messenger-room.js');
+                closePopup('contact-detail');
+                roomModule.openDirectMessengerWithContact(contact, () => openContactsPopup());
+            } catch (error) {
+                console.error('[ST-LifeSim] NPC 1:1 메신저 열기 실패:', error);
+                showToast('NPC 1:1 메신저를 열지 못했습니다.', 'error');
+            }
+        };
+        footer.appendChild(dmBtn);
+    }
+
     createPopup({
         id: 'contact-detail',
         title: `👤 ${getContactDisplayName(contact)}`,
         content: wrapper,
+        footer,
         className: 'slm-sub-panel',
         onBack: () => openContactsPopup(),
     });
@@ -551,6 +672,46 @@ function openContactDialog(existing, defaultBinding, onSave) {
     groupParticipantWrap.appendChild(groupParticipantCheck);
     groupParticipantWrap.appendChild(document.createTextNode(' 단톡 자동 응답 참여 가능'));
     fields.appearanceTags.insertAdjacentElement('afterend', groupParticipantWrap);
+
+    const emoticonCategoryLabel = document.createElement('label');
+    emoticonCategoryLabel.className = 'slm-label';
+    emoticonCategoryLabel.textContent = '😊 AI 이모티콘 카테고리';
+    emoticonCategoryLabel.style.marginTop = '8px';
+    const emoticonCategoryDesc = document.createElement('div');
+    emoticonCategoryDesc.className = 'slm-desc';
+    emoticonCategoryDesc.textContent = '체크한 카테고리의 이모티콘만 이 연락처/캐릭터가 AI 응답에서 사용할 수 있습니다. 모두 체크하면 전체 허용으로 저장됩니다.';
+    const emoticonCategoryBox = document.createElement('div');
+    emoticonCategoryBox.className = 'slm-check-list';
+    emoticonCategoryBox.style.display = 'flex';
+    emoticonCategoryBox.style.flexDirection = 'column';
+    emoticonCategoryBox.style.gap = '6px';
+    emoticonCategoryBox.style.marginBottom = '8px';
+    const emoticonCategories = getAllEmoticonCategories();
+    const initialEmoticonCategories = Array.isArray(existing?.emoticonCategories)
+        ? new Set(existing.emoticonCategories)
+        : new Set(emoticonCategories);
+    const emoticonCategoryChecks = [];
+    if (emoticonCategories.length === 0) {
+        const emptyCategoryNote = document.createElement('div');
+        emptyCategoryNote.className = 'slm-desc';
+        emptyCategoryNote.textContent = '등록된 이모티콘 카테고리가 없습니다. 먼저 이모티콘을 추가해 주세요.';
+        emoticonCategoryBox.appendChild(emptyCategoryNote);
+    } else {
+        emoticonCategories.forEach((category) => {
+            const categoryLabel = document.createElement('label');
+            categoryLabel.className = 'slm-toggle-label';
+            categoryLabel.style.fontSize = '13px';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = initialEmoticonCategories.has(category);
+            categoryLabel.append(checkbox, document.createTextNode(` ${category}`));
+            emoticonCategoryChecks.push({ category, checkbox });
+            emoticonCategoryBox.appendChild(categoryLabel);
+        });
+    }
+    groupParticipantWrap.insertAdjacentElement('afterend', emoticonCategoryLabel);
+    emoticonCategoryLabel.insertAdjacentElement('afterend', emoticonCategoryDesc);
+    emoticonCategoryDesc.insertAdjacentElement('afterend', emoticonCategoryBox);
     const initialAvatarStyle = getAvatarStyle(existing, { width: 72, height: 72, scale: 100, positionX: 50, positionY: 50 });
     const avatarActionRow = document.createElement('div');
     avatarActionRow.className = 'slm-input-row';
@@ -751,9 +912,14 @@ function openContactDialog(existing, defaultBinding, onSave) {
             : isUserAuto ? (existing?.name || getContext()?.name1 || name)
             : name;
         const displayName = (isCharAuto || isUserAuto) && name !== canonicalName ? name : '';
-        const groupChatParticipant = (isCharAuto || isUserAuto)
-            ? !!existing?.groupChatParticipant
-            : groupParticipantCheck.checked;
+        const groupChatParticipant = isUserAuto
+            ? false
+            : isCharAuto
+                ? isGroupChatContact(existing)
+                : groupParticipantCheck.checked;
+        const selectedEmoticonCategories = emoticonCategoryChecks
+            .filter(({ checkbox }) => checkbox.checked)
+            .map(({ category }) => category);
         const data = {
             id: existing?.id || generateId(),
             name: canonicalName,
@@ -768,6 +934,9 @@ function openContactDialog(existing, defaultBinding, onSave) {
             phone: '',
             tags: existing?.tags || [],
             appearanceTags: fields.appearanceTags.value.trim(),
+            emoticonCategories: emoticonCategories.length === 0
+                ? null
+                : (selectedEmoticonCategories.length === emoticonCategories.length ? null : selectedEmoticonCategories),
             groupChatParticipant,
             binding: targetBinding,
             isCharAuto,

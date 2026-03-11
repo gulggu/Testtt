@@ -21,13 +21,14 @@ import { showToast, showConfirm, escapeHtml } from './utils/ui.js';
 import { exportAllData, importAllData, clearAllData } from './utils/storage.js';
 import { renderTimeDividerUI, renderReadReceiptUI, renderNoContactUI, renderEventGeneratorUI, renderVoiceMemoUI, triggerQuickSend, triggerReadReceipt, triggerNoContact, triggerUserImageGenerationAndSend, triggerVoiceMemoInsertion, triggerDeletedMessage } from './modules/quick-tools/quick-tools.js';
 import { startFirstMsgTimer, renderFirstMsgSettingsUI } from './modules/firstmsg/firstmsg.js';
-import { initEmoticon, openEmoticonPopup, replaceAiSelectedEmoticons } from './modules/emoticon/emoticon.js';
+import { buildAiEmoticonContext, initEmoticon, openEmoticonPopup, replaceAiSelectedEmoticons } from './modules/emoticon/emoticon.js';
 import { initContacts, openContactsPopup, getContacts, getAppearanceTagsByName, buildAppearanceTagVariableMap, resolveAppearanceTagVariables } from './modules/contacts/contacts.js';
 import { initCall, isCallActive, onCharacterMessageRenderedForProactiveCall, openCallLogsPopup, triggerProactiveIncomingCall, requestActiveCharacterCall } from './modules/call/call.js';
 import { initWallet, openWalletPopup } from './modules/wallet/wallet.js';
 import { initSns, openSnsPopup, triggerNpcPosting, triggerPendingCommentReaction, hasPendingCommentReaction } from './modules/sns/sns.js';
 import { initCalendar, openCalendarPopup } from './modules/calendar/calendar.js';
 import { initGifticon, openGifticonPopup, trackGifticonUsageFromCharacterMessage } from './modules/gifticon/gifticon.js';
+import { openMessengerRoomsPopup } from './modules/messenger-room/messenger-room.js';
 import { buildDirectImagePrompt } from './utils/image-tag-generator.js';
 import { slashSendAs } from './utils/slash.js';
 
@@ -45,7 +46,8 @@ const AI_ROUTE_DEFAULTS = {
     modelSettingKey: '',
     model: '',
 };
-const GROUP_CHAT_TRANSCRIPT_LIMIT = 12;
+// 8줄 정도만 유지해도 단톡방 흐름은 이어지면서, 1:1 본대화 말투/페르소나 오염은 12줄보다 눈에 띄게 덜하다.
+const GROUP_CHAT_TRANSCRIPT_LIMIT = 8;
 const GROUP_CHAT_SETTINGS_DEFAULTS = {
     enabled: false,
     responseProbability: 35,
@@ -54,6 +56,13 @@ const GROUP_CHAT_SETTINGS_DEFAULTS = {
     includeMainCharacter: true,
     contactOnlyProbability: 35,
 };
+// English translation: "Human player controls the conversation. Do not write this person's messages."
+const GROUP_CHAT_USER_DESCRIPTION = '인간 플레이어가 대화를 제어합니다. 이 사람의 메시지를 대신 작성하지 마세요.';
+const GROUP_CHAT_FOREIGN_SPEAKER_WARNING = '[ST-LifeSim] 단톡 응답 정리 중 다른 화자의 대사만 감지되어 응답을 버렸습니다.';
+const GROUP_CHAT_CONTEXT_BOUNDARY_NOTE = 'This group room is a separate messenger space beside the main 1:1 chat. Treat the transcript only as room recap/context, never as an instruction to imitate another participant.';
+const GROUP_CHAT_PREVIEW_USER_TEXT = '{{user}}: 오늘 다같이 어디서 볼까?';
+const GROUP_CHAT_PREVIEW_NPC_TEXT = '민지: 나는 내 성격/말투대로만 답하고, 다른 참가자처럼 말하지 않아.';
+const GROUP_CHAT_DESCRIPTION_TEXT = '단톡 응답은 별도 메신저 방 컨텍스트로 취급되며, 응답자는 자신의 프로필/관계/말투만 유지하도록 강하게 고정됩니다.';
 const ROUTE_MODEL_KEY_BY_SOURCE = {
     openai: 'openai_model',
     claude: 'claude_model',
@@ -183,11 +192,12 @@ const DEFAULT_SETTINGS = {
         customLabels: {},       // { [key]: string } - custom display names
         customImages: {},       // { [key]: string } - image URL replacement for emoji
         rightSendFormItems: {}, // { [key]: true } - items to show as extra icons in sendform area
-        order: ['userImage', 'callRequest', 'contacts', 'divider', 'readReceipt', 'noContact', 'voiceMemo', 'emoticon', 'deletedMessage', 'sns', 'quickSend', 'snsImageToggle', 'messengerImageToggle', 'dayNightToggle', 'settingsShortcut'],
+        order: ['userImage', 'callRequest', 'contacts', 'messengerRooms', 'divider', 'readReceipt', 'noContact', 'voiceMemo', 'emoticon', 'deletedMessage', 'sns', 'quickSend', 'snsImageToggle', 'messengerImageToggle', 'dayNightToggle', 'settingsShortcut'],
         items: {
             userImage: true,
             callRequest: true,
             contacts: true,
+            messengerRooms: true,
             divider: true,
             readReceipt: true,
             noContact: true,
@@ -718,6 +728,7 @@ const QUICK_ACCESS_ITEMS = [
     } },
     { key: 'callRequest', icon: '📞', label: '통화 요청', moduleKey: 'call', action: async () => { await requestActiveCharacterCall(); } },
     { key: 'contacts', icon: '📋', label: '연락처', action: () => { closePopup('quick-access-menu'); openContactsPopup(); } },
+    { key: 'messengerRooms', icon: '💬', label: '메신저 방', action: () => { closePopup('quick-access-menu'); openMessengerRoomsPopup(); } },
     { key: 'divider', icon: '⏱️', label: '구분선 넣기', moduleKey: 'quickTools', action: () => { closePopup('quick-access-menu'); openQuickToolsPanel(); } },
     { key: 'readReceipt', icon: '🔕', label: '읽씹하기', moduleKey: 'quickTools', action: async () => { await triggerReadReceipt(); } },
     { key: 'noContact', icon: '📵', label: '연락 안 됨(안읽씹)', moduleKey: 'quickTools', action: async () => { await triggerNoContact(); } },
@@ -943,6 +954,7 @@ function openMainMenuPopup() {
 
     const menuItems = [
         { key: 'quickTools', icon: '🛠️', label: '퀵 도구', action: openQuickToolsPanel },
+        { key: null, icon: '💬', label: '메신저 방', action: openMessengerRoomsPopup },
         { key: 'emoticon', icon: '😊', label: '이모티콘', action: openEmoticonPopup },
         { key: 'contacts', icon: '📋', label: '연락처', action: openContactsPopup },
         { key: 'call', icon: '📞', label: '통화', action: openCallLogsPopup },
@@ -1041,6 +1053,18 @@ function buildGroupChatContactPool() {
 function buildGroupChatRosterEntries(settings) {
     const ctx = getContext();
     const roster = [];
+    if (ctx?.name1) {
+        roster.push({
+            type: 'user',
+            name: ctx.name1,
+            displayName: ctx.name1,
+            relationToUser: '본인 (인간 플레이어)',
+            relationToChar: '',
+            personality: '',
+            description: GROUP_CHAT_USER_DESCRIPTION,
+            avatar: '',
+        });
+    }
     if (settings.includeMainCharacter && ctx?.name2) {
         roster.push({
             type: 'char',
@@ -1090,11 +1114,29 @@ function normalizeGroupChatText(text) {
         .trim();
 }
 
-function sanitizeGroupChatReply(text, responderName) {
+function escapeRegex(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function sanitizeGroupChatPromptField(value) {
+    return normalizeGroupChatText(value)
+        .replace(/[<>{}\[\]]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * Cleans up a group-chat response and keeps only the responder's message when other speakers leak in.
+ * @param {string} text
+ * @param {string} responderName
+ * @param {Array<{ name?: string, displayName?: string }>} [roster]
+ * @returns {string}
+ */
+function sanitizeGroupChatReply(text, responderName, roster = []) {
     // 응답 텍스트를 정리하고, 모델이 붙인 화자명/불필요한 접두어를 함께 제거한다.
     let cleaned = normalizeGroupChatText(text);
     if (!cleaned) return '';
-    const escapedName = String(responderName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedName = escapeRegex(responderName);
     const prefixPatterns = [
         new RegExp(`^${escapedName}\\s*[:：-]\\s*`, 'i'),
         /^\s*(?:reply|response)\s*[:：-]\s*/i,
@@ -1102,6 +1144,40 @@ function sanitizeGroupChatReply(text, responderName) {
     prefixPatterns.forEach((pattern) => {
         cleaned = cleaned.replace(pattern, '');
     });
+    const ctx = getContext();
+    const participantNames = [
+        responderName,
+        ctx?.name1,
+        ctx?.name2,
+        ...roster.map((entry) => entry?.displayName || entry?.name),
+    ]
+        .map((name) => String(name || '').trim())
+        .filter(Boolean);
+    const uniqueNames = [...new Set(participantNames)];
+    let earliestForeignSpeakerIndex = -1;
+    uniqueNames
+        .filter((name) => name.toLowerCase() !== String(responderName || '').trim().toLowerCase())
+        .sort((a, b) => b.length - a.length)
+        .forEach((name) => {
+            const escaped = escapeRegex(name);
+            const match = cleaned.match(new RegExp(`(^|\\n)\\s*${escaped}\\s*[:：-]\\s*`, 'i'));
+            if (!match) return;
+            const index = match.index !== undefined ? match.index : -1;
+            if (earliestForeignSpeakerIndex === -1 || index < earliestForeignSpeakerIndex) {
+                earliestForeignSpeakerIndex = index;
+            }
+        });
+    if (earliestForeignSpeakerIndex === 0) {
+        console.error(GROUP_CHAT_FOREIGN_SPEAKER_WARNING, {
+            responderName,
+            raw: text,
+            guidance: 'Check the responder profile/personality data and the recent group-room recap if the model keeps speaking as another participant.',
+        });
+        return '';
+    }
+    if (earliestForeignSpeakerIndex > 0) {
+        cleaned = cleaned.slice(0, earliestForeignSpeakerIndex).trim();
+    }
     cleaned = cleaned.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim();
     return cleaned;
 }
@@ -1109,55 +1185,144 @@ function sanitizeGroupChatReply(text, responderName) {
 function buildGroupChatTranscript(limit = GROUP_CHAT_TRANSCRIPT_LIMIT) {
     const ctx = getContext();
     const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
-    // 최근 12개 발화면 1:1/단톡 맥락과 말투를 이어가기에 충분하면서도 프롬프트 길이를 과하게 늘리지 않는다.
+    // 최근 일부 발화만 사용해 단톡방 맥락은 유지하되 1:1 대화 스타일 오염을 줄인다.
     return chat.slice(-limit).map((msg) => {
         const speaker = msg?.is_user
             ? (ctx?.name1 || '{{user}}')
             : (msg?.name || ctx?.name2 || '{{char}}');
-        const text = normalizeGroupChatText(msg?.mes || '').replace(/\n/g, ' ');
-        return `${speaker}: ${text}`;
+        const text = sanitizeGroupChatPromptField(msg?.mes || '').replace(/\n/g, ' ');
+        return `[group-room] ${speaker}: ${text}`;
     }).join('\n');
+}
+
+async function enrichGroupChatReplyContent(text, senderName, transcript) {
+    const settings = getSettings();
+    const normalizedSource = normalizeQuotesForPicTag(String(text || ''));
+    PIC_TAG_REGEX.lastIndex = 0;
+    const picMatches = [...normalizedSource.matchAll(PIC_TAG_REGEX)];
+    let currentMes = normalizedSource;
+    const imagePlaceholders = new Map();
+    let imageCounter = 0;
+    if (picMatches.length > 0) {
+        const limitedPicMatches = picMatches.slice(0, MAX_MESSENGER_IMAGES_PER_RESPONSE);
+        const limitedSet = new Set(limitedPicMatches.map((match) => match.index));
+        const ctx = getContext();
+        const userName = ctx?.name1 || '';
+        const allContactsList = [...getContacts('character'), ...getContacts('chat')];
+        let offset = 0;
+        for (const match of picMatches) {
+            const fullTag = match[0];
+            const rawPrompt = (match[1] || match[2] || '').trim();
+            const adjustedIndex = match.index + offset;
+            let replacement = '';
+            if (rawPrompt) {
+                if (limitedSet.has(match.index) && !isCallActive() && settings.messageImageGenerationMode) {
+                    const includeNames = [senderName];
+                    collectMentionedContactNames(`${transcript}\n${rawPrompt}`, allContactsList).forEach((name) => {
+                        if (name && !includeNames.includes(name)) includeNames.push(name);
+                    });
+                    const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
+                    if (userName && userHintRegex.test(rawPrompt.toLowerCase())) includeNames.push(userName);
+                    const result = await processMessengerImageGeneration(rawPrompt, {
+                        charName: senderName,
+                        includeNames,
+                        contacts: allContactsList,
+                        settings,
+                    });
+                    if (result.imageUrl) {
+                        const safeUrl = escapeHtml(result.imageUrl);
+                        const safePrompt = escapeHtml(rawPrompt);
+                        const placeholder = `__GROUP_IMG_${imageCounter++}__`;
+                        imagePlaceholders.set(placeholder, `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image" style="max-width:100%;border-radius:var(--slm-image-radius,10px);margin:4px 0">`);
+                        replacement = placeholder;
+                    } else {
+                        replacement = result.fallbackText;
+                    }
+                } else {
+                    const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
+                    replacement = template.replace(/\{description\}/g, rawPrompt);
+                }
+            }
+            currentMes = currentMes.slice(0, adjustedIndex) + replacement + currentMes.slice(adjustedIndex + fullTag.length);
+            offset += replacement.length - fullTag.length;
+        }
+    }
+    let richHtml = replaceAiSelectedEmoticons(escapeHtml(currentMes).replace(/\n/g, '<br>'), senderName);
+    imagePlaceholders.forEach((imageHtml, placeholder) => {
+        richHtml = richHtml.replace(new RegExp(placeholder, 'g'), imageHtml);
+    });
+    return richHtml;
 }
 
 async function generateGroupChatReply(responder, roster) {
     const ctx = getContext();
     if (!ctx) return '';
+    const settings = getSettings();
     const transcript = buildGroupChatTranscript();
-    const latestUserMessage = normalizeGroupChatText(ctx?.chat?.[ctx.chat.length - 1]?.mes || '');
+    const responderName = sanitizeGroupChatPromptField(responder.displayName || responder.name);
+    const latestUserMessage = sanitizeGroupChatPromptField(ctx?.chat?.[ctx.chat.length - 1]?.mes || '');
+    const emoticonContext = buildAiEmoticonContext(responderName);
     const rosterText = roster.map((entry) => {
         const details = [];
-        if (entry.relationToUser) details.push(`Relation to {{user}}: ${entry.relationToUser}`);
-        if (entry.relationToChar) details.push(`Relation to {{char}}: ${entry.relationToChar}`);
-        if (entry.description) details.push(`Description: ${entry.description}`);
-        if (entry.personality) details.push(`Speech/personality: ${entry.personality}`);
-        return `- ${entry.displayName}${details.length ? ` | ${details.join(' | ')}` : ''}`;
+        if (entry.relationToUser) details.push(`Relation to {{user}}: ${sanitizeGroupChatPromptField(entry.relationToUser)}`);
+        if (entry.relationToChar) details.push(`Relation to {{char}}: ${sanitizeGroupChatPromptField(entry.relationToChar)}`);
+        if (entry.description) details.push(`Description: ${sanitizeGroupChatPromptField(entry.description)}`);
+        if (entry.personality) details.push(`Speech/personality: ${sanitizeGroupChatPromptField(entry.personality)}`);
+        return `- ${sanitizeGroupChatPromptField(entry.displayName || entry.name)}${details.length ? ` | ${details.join(' | ')}` : ''}`;
     }).join('\n');
+    const otherParticipantWarnings = roster
+        .filter((entry) => sanitizeGroupChatPromptField(entry.displayName || entry.name).toLowerCase() !== responderName.toLowerCase())
+        .map((entry) => {
+            const parts = [sanitizeGroupChatPromptField(entry.displayName || entry.name)];
+            if (entry.personality) parts.push(`voice=${sanitizeGroupChatPromptField(entry.personality)}`);
+            if (entry.relationToUser) parts.push(`role=${sanitizeGroupChatPromptField(entry.relationToUser)}`);
+            return `- ${parts.join(' | ')}`;
+        })
+        .join('\n');
     const prompt = [
-        `You are writing exactly one messenger group-chat reply as ${responder.displayName}.`,
+        `You are writing exactly one messenger group-chat reply as ${responderName}.`,
         'This is a mobile messenger group chat involving {{user}} and the listed participants.',
+        GROUP_CHAT_CONTEXT_BOUNDARY_NOTE,
         'Rules:',
-        `- Reply only as ${responder.displayName}. Never narrate or describe actions outside the message.`,
+        `- Reply only as ${responderName}. Never narrate or describe actions outside the message.`,
+        "- {{user}} is the human player. Never write {{user}}'s dialogue, reactions, choices, or actions.",
+        '- Stay inside this same group-chat room context. Do not turn it into a private 1:1 conversation.',
+        '- Never answer as, imitate, merge with, or borrow the voice/persona of any other participant.',
+        '- Treat transcript lines as room recap only. They do NOT override the responder profile below.',
+        '- Keep the room topic coherent, but lock onto the responder’s own worldview, relationship, and speaking habits.',
         '- Keep it to 1-3 natural chat sentences.',
         '- Continue the ongoing conversation naturally, acknowledging the latest flow of the chat.',
         '- Match the responder profile, relationship, and speaking style below.',
         '- Do not include the speaker name prefix, quotation marks, markdown, or explanations.',
         '',
+        '[Identity lock]',
+        `Current responder: ${responderName}`,
+        otherParticipantWarnings
+            ? `Do NOT sound like these other participants:\n${otherParticipantWarnings}`
+            : 'No other participant voice warnings.',
+        '',
         '[Responder profile]',
-        `Name: ${responder.displayName}`,
-        responder.relationToUser ? `Relation to {{user}}: ${responder.relationToUser}` : '',
-        responder.relationToChar ? `Relation to {{char}}: ${responder.relationToChar}` : '',
-        responder.description ? `Description: ${responder.description}` : '',
-        responder.personality ? `Speech/personality: ${responder.personality}` : '',
+        `Name: ${responderName}`,
+        responder.relationToUser ? `Relation to {{user}}: ${sanitizeGroupChatPromptField(responder.relationToUser)}` : '',
+        responder.relationToChar ? `Relation to {{char}}: ${sanitizeGroupChatPromptField(responder.relationToChar)}` : '',
+        responder.description ? `Description: ${sanitizeGroupChatPromptField(responder.description)}` : '',
+        responder.personality ? `Speech/personality: ${sanitizeGroupChatPromptField(responder.personality)}` : '',
         '',
         '[Allowed participants]',
         rosterText || '- {{user}} and {{char}}',
         '',
-        '[Recent chat transcript]',
+        '[Recent group-room recap]',
         transcript || '(no prior messages)',
         '',
         `[Latest user message]\n${latestUserMessage || '(empty)'}`,
         '',
-        `Output only ${responder.displayName}'s next message.`,
+        emoticonContext,
+        '',
+        settings.messageImageGenerationMode
+            ? (settings.messageImageInjectionPrompt || DEFAULT_SETTINGS.messageImageInjectionPrompt)
+            : MSG_IMAGE_OFF_PROMPT,
+        '',
+        `Output only ${responderName}'s next message.`,
     ].filter(Boolean).join('\n');
 
     let rawReply = '';
@@ -1166,7 +1331,9 @@ async function generateGroupChatReply(responder, roster) {
     } else if (typeof ctx.generateRaw === 'function') {
         rawReply = await ctx.generateRaw({ prompt, quietToLoud: false, trimNames: true });
     }
-    return sanitizeGroupChatReply(rawReply, responder.displayName);
+    const sanitizedReply = sanitizeGroupChatReply(rawReply, responder.displayName, roster);
+    if (!sanitizedReply) return '';
+    return enrichGroupChatReplyContent(sanitizedReply, responderName, transcript);
 }
 
 function pickRandomGroupResponder(candidates) {
@@ -1248,7 +1415,12 @@ async function executePlannedGroupChatTurn(plan) {
         }
     }
 
+    const userName = String(ctx?.name1 || '{{user}}').trim().toLowerCase();
     for (const responder of plan.responders) {
+        const responderNames = [responder?.displayName, responder?.name]
+            .map((name) => String(name || '').trim().toLowerCase())
+            .filter(Boolean);
+        if (userName && responderNames.includes(userName)) continue;
         const reply = await generateGroupChatReply(responder, plan.roster);
         if (!reply) continue;
         await slashSendAs(responder.displayName || responder.name, reply);
@@ -1369,10 +1541,46 @@ function openSettingsPanel(onBack) {
 
         const groupChatTitle = document.createElement('div');
         groupChatTitle.className = 'slm-label';
-        groupChatTitle.textContent = '💬 단톡 자동 응답';
+        groupChatTitle.textContent = '💬 단톡 / 메신저 방';
         groupChatTitle.style.fontWeight = '600';
         groupChatTitle.style.marginBottom = '6px';
         wrapper.appendChild(groupChatTitle);
+
+        const groupChatPreview = document.createElement('div');
+        groupChatPreview.className = 'slm-phone-preview';
+        const groupChatPreviewHeader = document.createElement('div');
+        groupChatPreviewHeader.className = 'slm-phone-preview-header';
+        groupChatPreviewHeader.textContent = '단톡방 미리보기';
+        const groupChatPreviewBody = document.createElement('div');
+        groupChatPreviewBody.className = 'slm-phone-preview-body';
+        const previewUserBubble = document.createElement('div');
+        previewUserBubble.className = 'slm-phone-bubble slm-phone-bubble-user';
+        previewUserBubble.textContent = GROUP_CHAT_PREVIEW_USER_TEXT;
+        const previewNpcBubble = document.createElement('div');
+        previewNpcBubble.className = 'slm-phone-bubble';
+        previewNpcBubble.textContent = GROUP_CHAT_PREVIEW_NPC_TEXT;
+        const previewInput = document.createElement('div');
+        previewInput.className = 'slm-phone-inputbar';
+        previewInput.textContent = '메시지 입력…   •   전송';
+        groupChatPreviewBody.append(previewUserBubble, previewNpcBubble, previewInput);
+        groupChatPreview.append(groupChatPreviewHeader, groupChatPreviewBody);
+        wrapper.appendChild(groupChatPreview);
+
+        const groupChatDesc = document.createElement('div');
+        groupChatDesc.className = 'slm-desc';
+        groupChatDesc.textContent = GROUP_CHAT_DESCRIPTION_TEXT;
+        wrapper.appendChild(groupChatDesc);
+
+        const roomPopupBtn = document.createElement('button');
+        roomPopupBtn.className = 'slm-btn slm-btn-primary';
+        roomPopupBtn.textContent = '📱 실제 메신저 방 열기';
+        roomPopupBtn.onclick = () => openMessengerRoomsPopup(openSettingsPanel);
+        wrapper.appendChild(roomPopupBtn);
+
+        const roomPopupDesc = document.createElement('div');
+        roomPopupDesc.className = 'slm-desc';
+        roomPopupDesc.textContent = '권장 방식: 유저가 방 멤버를 직접 골라 별도 메신저 방을 만들고, 그 방 안에서만 단톡 흐름을 진행합니다. 아래 설정은 레거시 자동 단톡용입니다.';
+        wrapper.appendChild(roomPopupDesc);
 
         const groupChatToggleRow = document.createElement('div');
         groupChatToggleRow.className = 'slm-settings-row';
@@ -1387,7 +1595,7 @@ function openSettingsPanel(onBack) {
             saveSettings();
             showToast(`단톡 자동 응답: ${settings.groupChat.enabled ? 'ON' : 'OFF'}`, 'success', 1500);
         };
-        groupChatToggleLabel.append(groupChatToggle, document.createTextNode(' 연락처의 단톡 참여 체크 항목으로 자동 응답 활성화'));
+        groupChatToggleLabel.append(groupChatToggle, document.createTextNode(' 레거시 자동 단톡 응답 사용 (권장: 위 메신저 방 기능)'));
         groupChatToggleRow.appendChild(groupChatToggleLabel);
         wrapper.appendChild(groupChatToggleRow);
 
@@ -2240,6 +2448,11 @@ function openSettingsPanel(onBack) {
         messageImagePromptInput.value = settings.messageImagePrompt || DEFAULT_SETTINGS.messageImagePrompt;
         messageImagePromptInput.oninput = () => { settings.messageImagePrompt = messageImagePromptInput.value; saveSettings(); };
         messageImagePromptGroup.appendChild(messageImagePromptInput);
+        const messageImagePromptHint = Object.assign(document.createElement('div'), {
+            className: 'slm-desc',
+            textContent: '메신저 사진용 프롬프트입니다. 실제 생성 시에는 감지된 인물의 핵심 appearance tags가 자동 보강되어 머리/눈/의상 같은 핵심 외형이 누락되지 않도록 합니다.',
+        });
+        messageImagePromptGroup.appendChild(messageImagePromptHint);
         const messageImagePromptResetBtn = document.createElement('button');
         messageImagePromptResetBtn.className = 'slm-btn slm-btn-ghost slm-btn-sm';
         messageImagePromptResetBtn.textContent = '↺ 기본값';
@@ -3506,6 +3719,36 @@ async function processMessengerImageGeneration(rawPrompt, options = {}) {
     return { imageUrl: '', fallbackText: template.replace(/\{description\}/g, rawPrompt) };
 }
 
+function waitForDelay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
+    if (!Number.isFinite(msgIdx) || msgIdx < 0) return false;
+    const selectors = [
+        `.mes[mesid="${msgIdx}"] .mes_text`,
+        `div.mes[mesid="${msgIdx}"] .mes_text`,
+        `#chat .mes[mesid="${msgIdx}"] .mes_text`,
+    ];
+    for (let attempt = 0; attempt < 6; attempt++) {
+        try {
+            const mesTextEl = selectors
+                .map(selector => document.querySelector(selector))
+                .find(Boolean);
+            if (mesTextEl) {
+                mesTextEl.innerHTML = html;
+                return true;
+            }
+        } catch (uiErr) {
+            console.warn(`[ST-LifeSim] ${logLabel} UI 업데이트 실패:`, uiErr);
+            return false;
+        }
+        await waitForDelay(attempt < 2 ? 50 : 120);
+    }
+    console.warn(`[ST-LifeSim] ${logLabel} UI 업데이트 대상 요소를 찾지 못했습니다.`, { msgIdx });
+    return false;
+}
+
 /**
  * char 메시지 렌더링 후 이미지 태그를 처리한다
  * - ON: <pic prompt="..."> 태그를 감지하여 이미지 생성 API로 실제 이미지 생성
@@ -3607,17 +3850,7 @@ async function applyCharacterImageDisplayMode() {
 
                 // 매 생성마다 메시지 데이터 + UI를 즉시 업데이트하여 순차적으로 결과가 표시되도록 한다
                 lastMsg.mes = currentMes;
-                if (Number.isFinite(msgIdx) && msgIdx >= 0) {
-                    try {
-                        const msgEl = document.querySelector(`.mes[mesid="${msgIdx}"]`);
-                        if (msgEl) {
-                            const mesTextEl = msgEl.querySelector('.mes_text');
-                            if (mesTextEl) mesTextEl.innerHTML = currentMes;
-                        }
-                    } catch (uiErr) {
-                        console.warn('[ST-LifeSim] 메시지 UI 업데이트 실패:', uiErr);
-                    }
-                }
+                await updateRenderedMessageHtml(msgIdx, currentMes, '이미지');
             }
 
             // 모든 이미지 처리 완료 후 채팅 저장
@@ -3657,6 +3890,7 @@ async function applyCharacterImageDisplayMode() {
 
             if (updatedMes !== mes) {
                 lastMsg.mes = updatedMes;
+                await updateRenderedMessageHtml(msgIdx, updatedMes, '이미지 텍스트');
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
@@ -3691,17 +3925,7 @@ async function applyCharacterEmoticonDisplayMode() {
     lastMsg.mes = updatedMes;
     // DOM mesid는 숫자 인덱스를 사용하므로 lastMsg 참조와 별개로 마지막 메시지 인덱스를 구한다.
     const msgIdx = Number(ctx.chat.length - 1);
-    if (Number.isFinite(msgIdx) && msgIdx >= 0) {
-        try {
-            const msgEl = document.querySelector(`.mes[mesid="${msgIdx}"]`);
-            if (msgEl) {
-                const mesTextEl = msgEl.querySelector('.mes_text');
-                if (mesTextEl) mesTextEl.innerHTML = updatedMes;
-            }
-        } catch (uiErr) {
-            console.warn('[ST-LifeSim] 이모티콘 UI 업데이트 실패:', uiErr);
-        }
-    }
+    await updateRenderedMessageHtml(msgIdx, updatedMes, '이모티콘');
     if (typeof ctx.saveChat === 'function') {
         await ctx.saveChat();
     }
