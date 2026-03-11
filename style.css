@@ -378,6 +378,13 @@ body[data-theme="dark"],
 }
 .slm-textarea:focus { outline: none; border-color: var(--slm-accent); }
 
+.slm-autogrow-textarea {
+  overflow-y: hidden;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .slm-select {
   width: 100%;
   padding: 10px 12px;
@@ -1076,6 +1083,17 @@ body[data-theme="dark"],
   color: var(--slm-text-secondary);
 }
 
+.slm-room-message-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.slm-room-message-actions .slm-btn {
+  padding: 2px 8px;
+  min-height: 24px;
+}
+
 .slm-room-composer {
   display: flex;
   align-items: flex-end;
@@ -1091,6 +1109,31 @@ body[data-theme="dark"],
   max-height: 120px;
   border-radius: 18px;
   margin: 0;
+}
+
+.slm-room-emoticon-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.slm-room-emoticon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 56px;
+}
+
+.slm-room-emoticon-btn img {
+  width: 36px !important;
+  height: 36px !important;
+}
+
+.slm-message-rich-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .slm-room-member-row {

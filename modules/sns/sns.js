@@ -2074,17 +2074,8 @@ function openAvatarSettingsDialog(onUpdate) {
 
             const avatarInput = document.createElement('input');
             avatarInput.className = 'slm-input';
-            avatarInput.type = 'url';
-            avatarInput.placeholder = '프로필 이미지 URL';
+            avatarInput.type = 'hidden';
             avatarInput.value = avatars[c.name] || '';
-            avatarInput.onchange = () => {
-                avatars[c.name] = avatarInput.value.trim();
-                saveAvatars(avatars);
-                onUpdate();
-                renderSummaryAvatar();
-                renderAvatarPreview();
-                renderContactList();
-            };
             const avatarUploadInput = document.createElement('input');
             avatarUploadInput.type = 'file';
             avatarUploadInput.accept = 'image/*';
@@ -2130,12 +2121,16 @@ function openAvatarSettingsDialog(onUpdate) {
             avatarButtonRow.className = 'slm-input-row';
             avatarButtonRow.style.margin = '6px 0 8px';
             avatarButtonRow.append(avatarUploadBtn, avatarClearBtn, avatarUploadInput);
+            const avatarNote = Object.assign(document.createElement('div'), {
+                className: 'slm-desc',
+                textContent: '프로필 이미지는 로컬 업로드만 지원합니다.',
+            });
             const initialAvatarStyle = getAvatarStyle(c.name, avatarStyles, { width: 56, height: 56, scale: 100, positionX: 50, positionY: 50 });
             const avatarScaleInput = Object.assign(document.createElement('input'), {
                 className: 'slm-input',
                 type: 'range',
                 min: '100',
-                max: '250',
+                max: '400',
                 step: '1',
                 value: String(initialAvatarStyle.scale),
             });
@@ -2289,9 +2284,10 @@ function openAvatarSettingsDialog(onUpdate) {
 
             item.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '아이디(@핸들)' }));
             item.appendChild(handleInput);
-            item.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '프로필 이미지 URL' }));
-            item.appendChild(avatarInput);
+            item.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '프로필 이미지' }));
             item.appendChild(avatarButtonRow);
+            item.appendChild(avatarNote);
+            item.appendChild(avatarInput);
             item.appendChild(avatarCropRow);
             item.appendChild(Object.assign(document.createElement('label'), { className: 'slm-label', textContent: '게시글/댓글 출력 언어' }));
             item.appendChild(languageSelect);
