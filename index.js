@@ -4307,14 +4307,14 @@ async function init() {
             onCharacterMessageRenderedForProactiveCall();
             trackGifticonUsageFromCharacterMessage();
             try {
-                await applyCharacterEmoticonDisplayMode();
-            } catch (e) {
-                console.error('[ST-LifeSim] 이모티콘 표시 모드 적용 오류:', e);
-            }
-            try {
                 await applyCharacterImageDisplayMode();
             } catch (e) {
                 console.error('[ST-LifeSim] 이미지 표시 모드 적용 오류:', e);
+            }
+            try {
+                await applyCharacterEmoticonDisplayMode();
+            } catch (e) {
+                console.error('[ST-LifeSim] 이모티콘 표시 모드 적용 오류:', e);
             }
         });
     }
