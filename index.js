@@ -3540,6 +3540,13 @@ function wrapRichMessageHtml(html) {
     return String(html || '');
 }
 
+function getNativeUpdateMessageBlock() {
+    const nativeUpdate =
+        globalThis?.SillyTavern?.updateMessageBlock
+        || globalThis?.updateMessageBlock;
+    return typeof nativeUpdate === 'function' ? nativeUpdate : null;
+}
+
 async function emitMessageRenderLifecycle(ctx, msgIdx) {
     if (!Number.isFinite(msgIdx) || msgIdx < 0) return;
     const evSrc = ctx?.eventSource;
@@ -3577,6 +3584,19 @@ async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
     }
     console.warn(`[ST-LifeSim] ${logLabel} UI 업데이트 대상 요소를 찾지 못했습니다.`, { msgIdx });
     return false;
+}
+
+async function refreshRenderedMessage(msgIdx, message, html, logLabel = '메시지') {
+    const nativeUpdateMessageBlock = getNativeUpdateMessageBlock();
+    if (nativeUpdateMessageBlock && message) {
+        try {
+            nativeUpdateMessageBlock(msgIdx, message);
+            return true;
+        } catch (err) {
+            console.warn(`[ST-LifeSim] ${logLabel} 기본 렌더러 갱신 실패, 직접 DOM 갱신으로 대체합니다:`, err);
+        }
+    }
+    return updateRenderedMessageHtml(msgIdx, html, logLabel);
 }
 
 /**
@@ -3680,7 +3700,8 @@ async function applyCharacterImageDisplayMode() {
 
                 // 매 생성마다 메시지 데이터 + UI를 즉시 업데이트하여 순차적으로 결과가 표시되도록 한다
                 lastMsg.mes = wrapRichMessageHtml(currentMes);
-                await updateRenderedMessageHtml(msgIdx, currentMes, '이미지');
+                await refreshRenderedMessage(msgIdx, lastMsg, currentMes, '이미지');
+                await emitMessageRenderLifecycle(ctx, msgIdx);
             }
 
             // 모든 이미지 처리 완료 후 채팅 저장
@@ -3688,7 +3709,6 @@ async function applyCharacterImageDisplayMode() {
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
-                await emitMessageRenderLifecycle(ctx, msgIdx);
             }
             if (generatedCount > 0) {
                 showToast(`📷 이미지 생성 완료`, 'success', 1500);
@@ -3721,7 +3741,7 @@ async function applyCharacterImageDisplayMode() {
 
             if (updatedMes !== mes) {
                 lastMsg.mes = wrapRichMessageHtml(updatedMes);
-                await updateRenderedMessageHtml(msgIdx, updatedMes, '이미지 텍스트');
+                await refreshRenderedMessage(msgIdx, lastMsg, updatedMes, '이미지 텍스트');
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
@@ -3757,7 +3777,7 @@ async function applyCharacterEmoticonDisplayMode() {
     lastMsg.mes = wrapRichMessageHtml(updatedMes);
     // DOM mesid는 숫자 인덱스를 사용하므로 lastMsg 참조와 별개로 마지막 메시지 인덱스를 구한다.
     const msgIdx = Number(ctx.chat.length - 1);
-    await updateRenderedMessageHtml(msgIdx, updatedMes, '이모티콘');
+    await refreshRenderedMessage(msgIdx, lastMsg, updatedMes, '이모티콘');
     if (typeof ctx.saveChat === 'function') {
         await ctx.saveChat();
     }
