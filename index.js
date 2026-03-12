@@ -3844,12 +3844,12 @@ async function applyCharacterImageDisplayMode() {
             // 제한 내 이미지만 생성, 초과분은 텍스트 폴백
             const limitedSet = new Set(limitedPicMatches.map(m => m.index));
 
-            // 순차적 처리: 각 이미지를 생성할 때마다 즉시 메시지와 UI를 업데이트한다
+            // 순차적 처리: 각 이미지를 생성한 뒤 치환 결과를 누적하고 마지막에 한 번에 UI를 갱신한다
             let currentMes = mes;
             let offset = 0; // 이전 치환으로 인한 누적 인덱스 오프셋
             let generatedCount = 0;
             const generatedImageUrls = [];
-            let lastGeneratedPrompt = '';
+            let latestSuccessfulPrompt = '';
 
             for (const match of picMatches) {
                 const fullTag = match[0];
@@ -3884,7 +3884,7 @@ async function applyCharacterImageDisplayMode() {
                     if (result.imageUrl) {
                         replacement = '';
                         generatedImageUrls.push(result.imageUrl);
-                        lastGeneratedPrompt = rawPrompt;
+                        latestSuccessfulPrompt = rawPrompt;
                         generatedCount++;
                     } else {
                         replacement = result.fallbackText;
@@ -3894,28 +3894,27 @@ async function applyCharacterImageDisplayMode() {
                 // 즉시 치환 적용 및 오프셋 갱신
                 currentMes = currentMes.slice(0, adjustedIndex) + replacement + currentMes.slice(adjustedIndex + fullTag.length);
                 offset += replacement.length - fullTag.length;
-
-                lastMsg.mes = currentMes;
-                if (generatedImageUrls.length > 0) {
-                    if (!lastMsg.extra || typeof lastMsg.extra !== 'object') lastMsg.extra = {};
-                    if (!Array.isArray(lastMsg.extra.image_swipes)) lastMsg.extra.image_swipes = [];
-                    lastMsg.extra.image_swipes = [...lastMsg.extra.image_swipes, ...generatedImageUrls];
-                    lastMsg.extra.image = generatedImageUrls[generatedImageUrls.length - 1];
-                    lastMsg.extra.inline_image = true;
-                    if (lastGeneratedPrompt) {
-                        lastMsg.extra.title = lastGeneratedPrompt;
-                    }
-                    generatedImageUrls.length = 0;
-                }
-                await refreshRenderedMessage(msgIdx, lastMsg, null, '이미지', { skipDirectHtmlSync: true });
-                if (typeof ctx.saveChat === 'function') {
-                    await ctx.saveChat();
-                }
-                await emitMessageRenderLifecycle(ctx, msgIdx);
             }
 
+            lastMsg.mes = currentMes;
+            if (generatedImageUrls.length > 0) {
+                if (!lastMsg.extra || typeof lastMsg.extra !== 'object') lastMsg.extra = {};
+                if (!Array.isArray(lastMsg.extra.image_swipes)) lastMsg.extra.image_swipes = [];
+                lastMsg.extra.image_swipes.push(...generatedImageUrls);
+                lastMsg.extra.image = generatedImageUrls.at(-1) || '';
+                lastMsg.extra.inline_image = true;
+                if (latestSuccessfulPrompt) {
+                    lastMsg.extra.title = latestSuccessfulPrompt;
+                }
+            }
+            await refreshRenderedMessage(msgIdx, lastMsg, null, '이미지', { skipDirectHtmlSync: true });
+            if (typeof ctx.saveChat === 'function') {
+                await ctx.saveChat();
+            }
+            await emitMessageRenderLifecycle(ctx, msgIdx);
+
             if (generatedCount > 0) {
-                showToast(`📷 이미지 생성 완료`, 'success', 1500);
+                showToast(`📷 이미지 생성 완료 (${generatedCount}개)`, 'success', 1500);
             }
         } else {
             // ── OFF 모드: 줄글 텍스트로 변환 ──
