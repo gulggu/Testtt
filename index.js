@@ -3540,6 +3540,10 @@ function wrapRichMessageHtml(html) {
     return String(html || '');
 }
 
+const MESSAGE_RENDER_WAIT_ATTEMPTS = 6;
+const MESSAGE_RENDER_RETRY_DELAY_FAST = 50;
+const MESSAGE_RENDER_RETRY_DELAY_SLOW = 120;
+
 function getRenderedMessageTextElement(msgIdx) {
     if (!Number.isFinite(msgIdx) || msgIdx < 0) return null;
     const selectors = [
@@ -3567,29 +3571,8 @@ function buildCharacterMessageRichHtml(text, senderName = '{{char}}') {
     return wrapRichMessageHtml(richHtml);
 }
 
-function replaceRenderedPicTag(renderedHtml, fullTag, replacementHtml) {
-    const source = String(renderedHtml || '');
-    const normalizedTag = normalizeQuotesForPicTag(String(fullTag || ''));
-    if (!source || !normalizedTag) return source;
-    const candidates = [
-        escapeHtml(normalizedTag),
-        normalizedTag,
-    ].filter(Boolean);
-    let updated = source;
-    candidates.forEach((candidate) => {
-        updated = updated.replace(new RegExp(escapeRegex(candidate), 'g'), replacementHtml);
-    });
-    return updated;
-}
-
 function getExistingOrBuiltRenderedHtml(msgIdx, text, senderName = '{{char}}') {
     return getRenderedMessageTextElement(msgIdx)?.innerHTML || buildCharacterMessageRichHtml(text, senderName);
-}
-
-function usePatchedRenderedHtml(patchedRenderedHtml, previousRenderedHtml, text, senderName = '{{char}}') {
-    return patchedRenderedHtml !== previousRenderedHtml
-        ? patchedRenderedHtml
-        : buildCharacterMessageRichHtml(text, senderName);
 }
 
 function getNativeUpdateMessageBlock() {
@@ -3614,7 +3597,7 @@ async function emitMessageRenderLifecycle(ctx, msgIdx) {
 
 async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
     if (!Number.isFinite(msgIdx) || msgIdx < 0) return false;
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; attempt < MESSAGE_RENDER_WAIT_ATTEMPTS; attempt++) {
         try {
             const mesTextEl = getRenderedMessageTextElement(msgIdx);
             if (mesTextEl) {
@@ -3625,13 +3608,26 @@ async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
             console.warn(`[ST-LifeSim] ${logLabel} UI 업데이트 실패:`, uiErr);
             return false;
         }
-        await waitForDelay(attempt < 2 ? 50 : 120);
+        await waitForDelay(attempt < 2 ? MESSAGE_RENDER_RETRY_DELAY_FAST : MESSAGE_RENDER_RETRY_DELAY_SLOW);
     }
     console.warn(`[ST-LifeSim] ${logLabel} UI 업데이트 대상 요소를 찾지 못했습니다.`, { msgIdx });
     return false;
 }
 
-async function refreshRenderedMessage(msgIdx, message, html, logLabel = '메시지') {
+async function waitForRenderedMessageTextElement(msgIdx, logLabel = '메시지') {
+    if (!Number.isFinite(msgIdx) || msgIdx < 0) return false;
+    for (let attempt = 0; attempt < MESSAGE_RENDER_WAIT_ATTEMPTS; attempt++) {
+        if (getRenderedMessageTextElement(msgIdx)) {
+            return true;
+        }
+        await waitForDelay(attempt < 2 ? MESSAGE_RENDER_RETRY_DELAY_FAST : MESSAGE_RENDER_RETRY_DELAY_SLOW);
+    }
+    console.warn(`[ST-LifeSim] ${logLabel} 렌더링 대상 요소를 찾지 못했습니다.`, { msgIdx });
+    return false;
+}
+
+async function refreshRenderedMessage(msgIdx, message, html, logLabel = '메시지', options = {}) {
+    const { skipDirectHtmlSync = false } = options;
     const nativeUpdateFn = getNativeUpdateMessageBlock();
     let nativeUpdated = false;
     if (nativeUpdateFn && message) {
@@ -3642,7 +3638,9 @@ async function refreshRenderedMessage(msgIdx, message, html, logLabel = '메시�
             console.warn(`[ST-LifeSim] ${logLabel} 기본 렌더러 갱신 실패, 직접 DOM 갱신으로 대체합니다:`, err);
         }
     }
-    const domUpdated = await updateRenderedMessageHtml(msgIdx, html, logLabel);
+    const domUpdated = skipDirectHtmlSync
+        ? await waitForRenderedMessageTextElement(msgIdx, logLabel)
+        : await updateRenderedMessageHtml(msgIdx, html, logLabel);
     return nativeUpdated || domUpdated;
 }
 
@@ -3700,7 +3698,6 @@ async function applyCharacterImageDisplayMode() {
 
             // 순차적 처리: 각 이미지를 생성할 때마다 즉시 메시지와 UI를 업데이트한다
             let currentMes = mes;
-            let renderedHtml = getExistingOrBuiltRenderedHtml(msgIdx, mes, charName);
             let offset = 0; // 이전 치환으로 인한 누적 인덱스 오프셋
             let generatedCount = 0;
 
@@ -3745,15 +3742,11 @@ async function applyCharacterImageDisplayMode() {
                 // 즉시 치환 적용 및 오프셋 갱신
                 currentMes = currentMes.slice(0, adjustedIndex) + replacement + currentMes.slice(adjustedIndex + fullTag.length);
                 offset += replacement.length - fullTag.length;
-                const renderedReplacement = /^\s*<img\b/i.test(replacement)
-                    ? replacement
-                    : escapeHtml(replacement).replace(/\n/g, '<br>');
-                const patchedRenderedHtml = replaceRenderedPicTag(renderedHtml, fullTag, renderedReplacement);
-                renderedHtml = usePatchedRenderedHtml(patchedRenderedHtml, renderedHtml, currentMes, charName);
 
-                // 매 생성마다 메시지 데이터 + UI를 즉시 업데이트하여 순차적으로 결과가 표시되도록 한다
+                // 매 생성마다 메시지 데이터와 기본 렌더러를 즉시 갱신해
+                // SillyTavern이 이미 적용한 .mes_text 마크업/CSS를 그대로 유지한다.
                 lastMsg.mes = currentMes;
-                await refreshRenderedMessage(msgIdx, lastMsg, renderedHtml, '이미지');
+                await refreshRenderedMessage(msgIdx, lastMsg, null, '이미지', { skipDirectHtmlSync: true });
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
@@ -3784,22 +3777,14 @@ async function applyCharacterImageDisplayMode() {
 
             // 역순으로 치환하여 인덱스 오프셋 문제를 방지한다
             let updatedMes = mes;
-            let renderedHtml = getExistingOrBuiltRenderedHtml(msgIdx, mes, charName);
             for (let i = replacements.length - 1; i >= 0; i--) {
                 const { index, length, replacement } = replacements[i];
-                const fullTag = mes.slice(index, index + length);
                 updatedMes = updatedMes.slice(0, index) + replacement + updatedMes.slice(index + length);
-                const patchedRenderedHtml = replaceRenderedPicTag(
-                    renderedHtml,
-                    fullTag,
-                    escapeHtml(replacement).replace(/\n/g, '<br>'),
-                );
-                renderedHtml = usePatchedRenderedHtml(patchedRenderedHtml, renderedHtml, updatedMes, charName);
             }
 
             if (updatedMes !== mes) {
                 lastMsg.mes = updatedMes;
-                await refreshRenderedMessage(msgIdx, lastMsg, renderedHtml, '이미지 텍스트');
+                await refreshRenderedMessage(msgIdx, lastMsg, null, '이미지 텍스트', { skipDirectHtmlSync: true });
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
