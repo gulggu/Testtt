@@ -35,7 +35,7 @@ export function escapeHtml(str) {
 
 /**
  * 토스트 알림을 화면에 표시한다
- * @param {string} message - 표시할 메시지
+ * @param {string|Node} message - 표시할 메시지 또는 커스텀 노드
  * @param {'info'|'success'|'error'|'warn'} type - 토스트 타입
  * @param {number} duration - 표시 시간(ms), 기본 3000ms
  */
@@ -50,7 +50,12 @@ export function showToast(message, type = 'info', duration = 3000) {
 
     const toast = document.createElement('div');
     toast.className = `slm-toast slm-toast-${type}`;
-    toast.textContent = message;
+    if (message instanceof Node) {
+        toast.classList.add('slm-toast-rich');
+        toast.appendChild(message);
+    } else {
+        toast.textContent = String(message ?? '');
+    }
 
     container.appendChild(toast);
 
