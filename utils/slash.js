@@ -30,6 +30,14 @@ async function run(command) {
     }
 }
 
+function isImageCommandResult(resultStr) {
+    return resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:');
+}
+
+function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function generateQuietText(prompt, quietName = null) {
     if (prompt == null) return '';
     return await generateBackendText({
@@ -146,6 +154,55 @@ export async function slashGen(prompt, name = null) {
  */
 export async function slashGenQuiet(prompt) {
     return await generateQuietText(prompt);
+}
+
+/**
+ * /sd quiet=true 이미지 생성 명령을 재시도 포함으로 실행한다.
+ * @param {string} prompt
+ * @param {Object} [options]
+ * @param {Object|null} [options.ctx]
+ * @param {number} [options.retries]
+ * @param {number} [options.retryDelayMs]
+ * @param {number} [options.timeoutMs]
+ * @returns {Promise<string>}
+ */
+export async function runSdImageGeneration(prompt, options = {}) {
+    const trimmedPrompt = String(prompt || '').trim();
+    if (!trimmedPrompt) return '';
+    const ctx = options.ctx || getContext();
+    if (!ctx) return '';
+    if (typeof ctx.executeSlashCommandsWithOptions !== 'function' && typeof ctx.executeSlashCommands !== 'function') return '';
+
+    const retries = Math.max(0, Number(options.retries) || 0);
+    const retryDelayMs = Math.max(0, Number(options.retryDelayMs) || 450);
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs) || 25000);
+    const command = `/sd quiet=true ${trimmedPrompt}`;
+    const runOnce = async () => {
+        if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
+            return await ctx.executeSlashCommandsWithOptions(command, { showOutput: false });
+        }
+        return await ctx.executeSlashCommands(command);
+    };
+
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+        try {
+            const result = await Promise.race([
+                runOnce(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('sd_image_generation_timeout')), timeoutMs)),
+            ]);
+            const resultStr = String(result?.pipe || result || '').trim();
+            if (resultStr && isImageCommandResult(resultStr)) {
+                return resultStr;
+            }
+            console.warn('[ST-LifeSim] /sd 이미지 생성 결과가 비어있거나 URL 형식이 아닙니다.', { attempt: attempt + 1, result: resultStr });
+        } catch (error) {
+            console.warn('[ST-LifeSim] /sd 이미지 생성 시도 실패:', { attempt: attempt + 1, error });
+        }
+        if (attempt < retries && retryDelayMs > 0) {
+            await wait(retryDelayMs * (attempt + 1));
+        }
+    }
+    return '';
 }
 
 /**

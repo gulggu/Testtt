@@ -7,6 +7,7 @@ import { generateBackendText } from '../../utils/backend-generation.js';
 import { buildAiEmoticonContext, replaceAiSelectedEmoticons, buildEmoticonMessageHtml, buildEmoticonPickerContent } from '../emoticon/emoticon.js';
 import { translateTextToKorean } from '../sns/sns.js';
 import { buildDirectImagePrompt } from '../../utils/image-tag-generator.js';
+import { runSdImageGeneration } from '../../utils/slash.js';
 import { applyProfileImageStyle, normalizeProfileImageStyle, readImageFileAsDataUrl } from '../../utils/profile-image.js';
 import { escapeHtml, generateId, showConfirm, showToast } from '../../utils/ui.js';
 
@@ -616,6 +617,45 @@ function buildRoomCardIcon(room, candidateMap = getCandidateMap()) {
     return icon;
 }
 
+function buildRoomReplyToastContent(room, senderLabel, messageText, candidateMap = getCandidateMap()) {
+    const container = document.createElement('div');
+    container.className = 'slm-room-reply-toast';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'slm-room-reply-toast-avatar';
+    const avatarSource = getRoomAvatarSource(room, candidateMap);
+    if (avatarSource?.avatar) {
+        const img = document.createElement('img');
+        img.className = 'slm-room-reply-toast-avatar-image';
+        img.src = avatarSource.avatar;
+        img.alt = avatarSource.label || getRoomTitle(room, candidateMap);
+        applyProfileImageStyle(
+            avatar,
+            img,
+            avatarSource.avatarStyle,
+            ROOM_AVATAR_DEFAULTS,
+        );
+        avatar.appendChild(img);
+    } else {
+        avatar.textContent = isGroupMessengerRoom(room) ? ROOM_ICON_GROUP : ROOM_ICON_DIRECT;
+    }
+
+    const body = document.createElement('div');
+    body.className = 'slm-room-reply-toast-body';
+
+    const title = document.createElement('div');
+    title.className = 'slm-room-reply-toast-title';
+    title.textContent = getRoomTitle(room, candidateMap);
+
+    const preview = document.createElement('div');
+    preview.className = 'slm-room-reply-toast-preview';
+    preview.textContent = `${senderLabel}: ${messageText}`;
+
+    body.append(title, preview);
+    container.append(avatar, body);
+    return container;
+}
+
 export function openDirectMessengerWithContact(contact, onBack) {
     if (!contact || contact.isUserAuto || contact.isCharAuto) {
         showToast('NPC 연락처에서만 1:1 메신저를 시작할 수 있습니다.', 'warn');
@@ -920,14 +960,7 @@ async function generateRoomMessageImageViaApi(imagePrompt) {
     if (!imagePrompt || !imagePrompt.trim()) return '';
     const ctx = getContext();
     if (!ctx) return '';
-    if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
-        const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${imagePrompt}`, { showOutput: false });
-        const resultStr = String(result?.pipe || result || '').trim();
-        if (resultStr && (resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:'))) {
-            return resultStr;
-        }
-    }
-    return '';
+    return await runSdImageGeneration(imagePrompt, { ctx, retries: 2, retryDelayMs: 500, timeoutMs: 25000 });
 }
 
 async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
@@ -1155,10 +1188,8 @@ async function runRoomAutoReplies(roomId, onUpdate = null, options = {}) {
                     });
                     const replyPreview = String(reply.text || '').replace(/\s+/g, ' ').trim();
                     if (replyPreview) {
-                        const roomTitle = getRoomTitle(freshRoom, candidateMap);
                         const senderLabel = getMemberDisplayLabel(responderKey, candidateMap);
-                        const compactPreview = replyPreview.length > 42 ? `${replyPreview.slice(0, 42)}…` : replyPreview;
-                        showToast(`${roomTitle} · ${senderLabel}: ${compactPreview}`, 'info', 2200);
+                        showToast(buildRoomReplyToastContent(freshRoom, senderLabel, replyPreview, candidateMap), 'info', 2600);
                     }
                     latestState.onUpdate?.(freshRoom);
                     _activeRoomListRenderer?.();
@@ -1623,37 +1654,6 @@ function openMessengerRoomDetail(roomId, onBack) {
 
     const actions = document.createElement('div');
     actions.className = 'slm-btn-row';
-    if (!isMainCharInRoom(room)) {
-        const insightBtn = document.createElement('button');
-        insightBtn.className = 'slm-btn slm-btn-secondary slm-btn-sm';
-        insightBtn.textContent = '👀 {{char}}의 간접 의견';
-        insightBtn.onclick = async () => {
-            insightBtn.disabled = true;
-            try {
-                const freshRoom = getMessengerRoomById(roomId);
-                const text = await generateOutsiderObservation(freshRoom, candidateMap);
-                if (!text) {
-                    showToast('간접 의견을 만들지 못했습니다.', 'warn');
-                    return;
-                }
-                appendRoomMessage(freshRoom, {
-                    id: generateId(),
-                    authorKey: MAIN_CHAR_MEMBER_KEY,
-                    authorName: String(getContext()?.name2 || '{{char}}').trim() || '{{char}}',
-                    text,
-                    timestamp: Date.now(),
-                    type: 'outsider',
-                });
-                renderMessages();
-            } catch (error) {
-                console.error('[ST-LifeSim] 메신저 방 간접 의견 생성 오류:', error);
-                showToast('간접 의견 생성 실패', 'error');
-            } finally {
-                insightBtn.disabled = false;
-            }
-        };
-        actions.appendChild(insightBtn);
-    }
     const editBtn = document.createElement('button');
     editBtn.className = 'slm-btn slm-btn-ghost slm-btn-sm';
     editBtn.textContent = '✏️ 멤버 편집';

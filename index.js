@@ -31,6 +31,7 @@ import { initGifticon, openGifticonPopup, trackGifticonUsageFromCharacterMessage
 import { openMessengerRoomsPopup, appendExternalRoomMessage, buildRoomTranscriptText } from './modules/messenger-room/messenger-room.js';
 import { buildDirectImagePrompt } from './utils/image-tag-generator.js';
 import { generateBackendText } from './utils/backend-generation.js';
+import { runSdImageGeneration } from './utils/slash.js';
 
 // 설정 키
 const SETTINGS_KEY = 'st-lifesim';
@@ -3477,16 +3478,13 @@ async function generateMessageImageViaApi(imagePrompt) {
     try {
         const ctx = getContext();
         if (!ctx) return '';
-        if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
-            const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${imagePrompt}`, { showOutput: false });
-            const resultStr = String(result?.pipe || result || '').trim();
-            if (resultStr && (resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:'))) {
-                if (isUrlAlreadyInChat(resultStr, ctx)) {
-                    console.warn('[ST-LifeSim] /sd 이미지 URL이 이미 채팅에 존재합니다. 재사용 방지를 위해 거부합니다.');
-                    return '';
-                }
-                return resultStr;
+        const imageUrl = await runSdImageGeneration(imagePrompt, { ctx, retries: 2, retryDelayMs: 500, timeoutMs: 25000 });
+        if (imageUrl) {
+            if (isUrlAlreadyInChat(imageUrl, ctx)) {
+                console.warn('[ST-LifeSim] /sd 이미지 URL이 이미 채팅에 존재합니다. 재사용 방지를 위해 거부합니다.');
+                return '';
             }
+            return imageUrl;
         }
         return '';
     } catch (e) {

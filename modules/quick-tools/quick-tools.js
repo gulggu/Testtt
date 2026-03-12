@@ -10,7 +10,7 @@
  */
 
 import { getContext } from '../../utils/st-context.js';
-import { slashSend, slashGen, slashGenQuiet, slashSendAs } from '../../utils/slash.js';
+import { slashSend, slashGen, slashGenQuiet, slashSendAs, runSdImageGeneration } from '../../utils/slash.js';
 import { showToast, escapeHtml, generateId } from '../../utils/ui.js';
 import { loadData, saveData, getExtensionSettings } from '../../utils/storage.js';
 import { getAppearanceTagsByName, getContacts } from '../contacts/contacts.js';
@@ -651,14 +651,7 @@ async function generateUserImage(prompt) {
             return '';
         }
 
-        if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
-            const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${tagResult.finalPrompt}`, { showOutput: false });
-            const resultStr = String(result?.pipe || result || '').trim();
-            if (resultStr && (resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:'))) {
-                return resultStr;
-            }
-        }
-        return '';
+        return await runSdImageGeneration(tagResult.finalPrompt, { ctx, retries: 2, retryDelayMs: 500, timeoutMs: 25000 });
     } catch (e) {
         console.warn('[ST-LifeSim] 유저 이미지 생성 API 호출 실패:', e);
         return '';

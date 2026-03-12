@@ -17,6 +17,7 @@ import { getContacts, getAppearanceTagsByName } from '../contacts/contacts.js';
 import { buildDirectImagePrompt } from '../../utils/image-tag-generator.js';
 import { applyProfileImageStyle, normalizeProfileImageStyle, readImageFileAsDataUrl } from '../../utils/profile-image.js';
 import { generateBackendText } from '../../utils/backend-generation.js';
+import { runSdImageGeneration } from '../../utils/slash.js';
 
 const MODULE_KEY = 'sns-feed';
 const AVATARS_KEY = 'sns-avatars';
@@ -422,19 +423,14 @@ async function generateImageViaApi(imagePrompt) {
             console.warn('[ST-LifeSim] 이미지 생성: 컨텍스트를 가져올 수 없습니다.');
             return '';
         }
-        // SillyTavern SlashCommandParser를 통해 /sd 명령어 사용
-        if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
-            const result = await ctx.executeSlashCommandsWithOptions(`/sd quiet=true ${imagePrompt}`, { showOutput: false });
-            const resultStr = String(result?.pipe || result || '').trim();
-            // 결과가 URL-like 문자열이면 반환
-            if (resultStr && (resultStr.startsWith('http') || resultStr.startsWith('/') || resultStr.startsWith('data:'))) {
-                // C2: Reject URLs that already exist in the SNS feed to prevent reuse
-                if (isUrlAlreadyInFeed(resultStr)) {
-                    console.warn('[ST-LifeSim] SNS 이미지 URL이 이미 피드에 존재합니다. 재사용 방지를 위해 거부합니다.');
-                    return '';
-                }
-                return resultStr;
+        const imageUrl = await runSdImageGeneration(imagePrompt, { ctx, retries: 2, retryDelayMs: 500, timeoutMs: 25000 });
+        if (imageUrl) {
+            // C2: Reject URLs that already exist in the SNS feed to prevent reuse
+            if (isUrlAlreadyInFeed(imageUrl)) {
+                console.warn('[ST-LifeSim] SNS 이미지 URL이 이미 피드에 존재합니다. 재사용 방지를 위해 거부합니다.');
+                return '';
             }
+            return imageUrl;
         }
         return '';
     } catch (e) {
