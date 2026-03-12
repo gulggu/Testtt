@@ -1072,15 +1072,16 @@ async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
             });
         }
     }
-    const plainText = processedText
-        // INLINE 성공 케이스는 본문에 [사진] 텍스트를 남기지 않고 태그만 제거한다.
-        // (실제 이미지는 extra.image_swipes 기반으로 버블 내부에 렌더링)
-        .replace(/<?pic\s+[^>\n]*?\bprompt\s*=\s*(?:"([^"]*)"|'([^']*)')(?:\s*\/?\s*>)?/gi, ' ')
+    // INLINE 성공 케이스는 본문에 [사진] 텍스트를 남기지 않고 태그만 제거한다.
+    // (실제 이미지는 extra.image_swipes 기반으로 버블 내부에 렌더링)
+    const picStrippedText = processedText.replace(/<?pic\s+[^>\n]*?\bprompt\s*=\s*(?:"([^"]*)"|'([^']*)')(?:\s*\/?\s*>)?/gi, ' ');
+    const fallbackText = picStrippedText || normalizeRoomPromptText(rawText);
+    const emoticonMedia = extractAiSelectedEmoticonMedia(fallbackText, senderName);
+    const plainText = String(emoticonMedia.text || fallbackText)
         .split('\n')
         .map((line) => line.replace(/\s+/g, ' ').trim())
         .join('\n')
         .trim();
-    const emoticonMedia = extractAiSelectedEmoticonMedia(plainText || normalizeRoomPromptText(rawText), senderName);
     const extra = normalizeRoomMessageExtra({
         image_swipes: inlineImages,
         image: inlineImages[inlineImages.length - 1] || '',
@@ -1089,7 +1090,7 @@ async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
         emoticon_images: emoticonMedia.emoticons,
     });
     const hasInlineMedia = hasRoomInlineMedia({ extra });
-    const normalizedText = emoticonMedia.text || (plainText || normalizeRoomPromptText(rawText));
+    const normalizedText = plainText || normalizeRoomPromptText(rawText);
     // inline 미디어가 있으면 HTML 문자열을 저장하지 않고,
     // renderRoomMessageBubbleContent가 text + extra 메타데이터로 다시 렌더링한다.
     const html = hasInlineMedia ? '' : buildRoomMessageHtml(normalizedText, senderName);
@@ -1097,6 +1098,7 @@ async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
         text: normalizedText,
         html: html !== normalizedText ? html : '',
         extra,
+        rawText: normalizedSource,
     };
 }
 
@@ -1250,6 +1252,7 @@ async function runRoomAutoReplies(roomId, onUpdate = null, options = {}) {
                         text: reply.text,
                         html: reply.html || '',
                         extra: reply.extra,
+                        rawText: reply.rawText || reply.text,
                         timestamp: Date.now(),
                         type: 'message',
                     });
@@ -1306,10 +1309,10 @@ function renderRoomMessageBubbleContent(message, bubble) {
     const senderName = String(message?.authorName || getContext()?.name1 || '{{user}}').trim() || '{{user}}';
     const extra = normalizeRoomMessageExtra(message?.extra);
     if (hasRoomInlineMedia({ extra })) {
-        const textHtml = buildRoomPlainMessageHtml(String(message?.text || ''));
+        const textHtml = buildRoomMessageHtml(String(message?.text || ''), senderName);
         const mediaHtml = buildRoomInlineMediaHtml(extra, senderName);
         bubble.innerHTML = `<div class="slm-room-message-rich-content">${textHtml}${mediaHtml}</div>`;
-        bubble.classList.remove('multiline');
+        bubble.classList.toggle('multiline', isSegmentedRoomMessageHtml(textHtml));
         bubble.classList.toggle('emoticon-only', !textHtml && extra.emoticon_images.length > 0 && extra.image_swipes.length === 0);
         return;
     }
@@ -1337,7 +1340,7 @@ function openRoomMessageEditPopup(roomId, messageId, onBack, onSaved) {
     const input = document.createElement('textarea');
     input.className = 'slm-textarea';
     input.rows = 5;
-    input.value = message.text || '';
+    input.value = message.rawText || message.text || '';
     wrapper.appendChild(input);
 
     const footer = document.createElement('div');
@@ -1376,6 +1379,7 @@ function openRoomMessageEditPopup(roomId, messageId, onBack, onSaved) {
                 text: enriched?.text || nextText,
                 html: enriched?.html || '',
                 extra: enriched?.extra,
+                rawText: enriched?.rawText || nextText,
             });
             close();
             onSaved?.();
