@@ -3892,10 +3892,10 @@ async function applyCharacterImageDisplayMode() {
                 offset += replacement.length - fullTag.length;
 
                 // 매 생성마다 메시지 데이터를 즉시 갱신해 생성 직후 새 이미지가 화면에 바로 반영되도록 한다.
-                // 이때 기본 렌더러가 만든 .mes_text 구조는 유지하고 생성 미디어 태그만 복원해 기존 텍스트 스타일 깨짐을 막는다.
+                // <img> 태그가 기본 렌더러에서 빈칸으로 소거되는 환경이 있어, 매번 확정 rich HTML로 직접 동기화한다.
                 lastMsg.mes = currentMes;
-                // renderedHtml을 덮어쓰지 않고 escaped media만 hydrate한다.
-                await refreshRenderedMessage(msgIdx, lastMsg, null, '이미지', { syncEscapedMediaOnly: true });
+                const renderedHtml = buildCharacterMessageRichHtml(currentMes, charName);
+                await refreshRenderedMessage(msgIdx, lastMsg, renderedHtml, '이미지');
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
