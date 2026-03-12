@@ -3587,10 +3587,10 @@ async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
 }
 
 async function refreshRenderedMessage(msgIdx, message, html, logLabel = '메시지') {
-    const nativeUpdateMessageBlock = getNativeUpdateMessageBlock();
-    if (nativeUpdateMessageBlock && message) {
+    const nativeUpdateFn = getNativeUpdateMessageBlock();
+    if (nativeUpdateFn && message) {
         try {
-            nativeUpdateMessageBlock(msgIdx, message);
+            nativeUpdateFn(msgIdx, message);
             return true;
         } catch (err) {
             console.warn(`[ST-LifeSim] ${logLabel} 기본 렌더러 갱신 실패, 직접 DOM 갱신으로 대체합니다:`, err);
@@ -3701,15 +3701,12 @@ async function applyCharacterImageDisplayMode() {
                 // 매 생성마다 메시지 데이터 + UI를 즉시 업데이트하여 순차적으로 결과가 표시되도록 한다
                 lastMsg.mes = wrapRichMessageHtml(currentMes);
                 await refreshRenderedMessage(msgIdx, lastMsg, currentMes, '이미지');
-                await emitMessageRenderLifecycle(ctx, msgIdx);
-            }
-
-            // 모든 이미지 처리 완료 후 채팅 저장
-            if (currentMes !== mes) {
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
+                await emitMessageRenderLifecycle(ctx, msgIdx);
             }
+
             if (generatedCount > 0) {
                 showToast(`📷 이미지 생성 완료`, 'success', 1500);
             }
