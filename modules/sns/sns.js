@@ -257,7 +257,7 @@ async function createSnsImagePrompt(ctx, sourcePrompt, authorName, contacts = []
     if (!ctx) return { sceneTags: '', appearanceGroups: [], finalPrompt: '' };
     const tagWeight = Number(getExtensionSettings()?.['st-lifesim']?.tagWeight) || 0;
     const promptOptions = {
-        includeNames: [authorName].filter(Boolean),
+        forceIncludeNames: [authorName].filter(Boolean),
         contacts: [],
         getAppearanceTagsByName,
         tagWeight,

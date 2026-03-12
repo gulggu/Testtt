@@ -638,7 +638,7 @@ async function generateUserImage(prompt) {
         const tagWeight = Number(getExtensionSettings()?.['st-lifesim']?.tagWeight) || 0;
         const additionalPrompt = String(getExtensionSettings()?.['st-lifesim']?.tagGenerationAdditionalPrompt || '').trim();
         const tagResult = await generateImageTags(prompt.trim(), {
-            includeNames,
+            forceIncludeNames: includeNames,
             contacts: allContactsList,
             getAppearanceTagsByName,
             tagWeight,
