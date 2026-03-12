@@ -890,7 +890,15 @@ function mergeAppearanceGroupsWithMatched(appearanceGroups = [], matched = []) {
     return appearanceGroups
         .map((group) => {
             const { name } = parseAppearanceGroup(group);
-            const sourceTags = matchedMap.get(String(name || '').trim().toLowerCase()) || '';
+            const normalizedName = String(name || '').trim().toLowerCase();
+            let sourceTags = matchedMap.get(normalizedName) || '';
+            if (!sourceTags) {
+                const characterIndexMatch = normalizedName.match(/^character\s+(\d+)$/i);
+                if (characterIndexMatch) {
+                    const matchedEntry = matched[Number(characterIndexMatch[1]) - 1];
+                    sourceTags = String(matchedEntry?.appearanceTags || '').trim();
+                }
+            }
             return sourceTags ? mergeAppearanceGroupWithCore(group, sourceTags) : safeAppearanceGroup(group);
         })
         .filter(Boolean);
