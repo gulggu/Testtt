@@ -1531,19 +1531,10 @@ body[data-theme="dark"],
   height: 36px !important;
 }
 
-.slm-message-rich-content,
-.slm-room-message-rich-content {
+.slm-message-rich-content {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.slm-message-inline-media,
-.slm-room-message-inline-media {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 4px;
 }
 
 .slm-message-rich-content .slm-msg-generated-image,
