@@ -380,7 +380,7 @@ function sanitizeRoomReply(text, responderName, memberLabels = []) {
     return cleaned.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim();
 }
 
-function buildRoomMessageHtml(text, senderName) {
+function buildRoomMessageHtml(text, senderName, tagReplacementMap = null) {
     const source = String(text || '');
     const escaped = escapeHtml(source);
     if (!escaped) return '';
@@ -395,7 +395,7 @@ function buildRoomMessageHtml(text, senderName) {
     const html = paragraphs.length > 1
         ? `<div class="slm-room-message-segments">${paragraphs.map((paragraph) => `<span class="slm-room-message-segment">${renderParagraph(paragraph)}</span>`).join('')}</div>`
         : renderParagraph(escaped);
-    return replaceAiSelectedEmoticons(html, senderName);
+    return replaceAiSelectedEmoticons(html, senderName, tagReplacementMap);
 }
 
 function isSegmentedRoomMessageHtml(html) {
@@ -969,8 +969,7 @@ async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
     const allContactsList = getAllContacts();
     const normalizedSource = normalizeQuotesForRoomPicTag(String(rawText || ''));
     let processedText = normalizedSource;
-    const imagePlaceholders = new Map();
-    let imageCounter = 0;
+    const imageTagReplacementEntries = [];
     const transcript = buildRoomTranscript(room, candidateMap);
     const userName = String(getContext()?.name1 || '').trim();
     ROOM_PIC_TAG_REGEX.lastIndex = 0;
@@ -999,9 +998,8 @@ async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
                     if (imageUrl) {
                         const safeUrl = escapeHtml(imageUrl);
                         const safePrompt = escapeHtml(rawPrompt);
-                        const placeholder = `__ROOM_IMG_${imageCounter++}__`;
-                        imagePlaceholders.set(placeholder, `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image" style="max-width:100%;border-radius:var(--slm-image-radius,10px);margin:4px 0">`);
-                        replacement = placeholder;
+                        imageTagReplacementEntries.push([fullTag, `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image" style="max-width:100%;border-radius:var(--slm-image-radius,10px);margin:4px 0">`]);
+                        replacement = fullTag;
                     }
                 }
                 if (!replacement) {
@@ -1019,12 +1017,9 @@ async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
             });
         }
     }
-    let html = buildRoomMessageHtml(processedText, senderName);
-    imagePlaceholders.forEach((imageHtml, placeholder) => {
-        html = html.replace(new RegExp(placeholder, 'g'), imageHtml);
-    });
+    const html = buildRoomMessageHtml(processedText, senderName, imageTagReplacementEntries);
     const plainText = processedText
-        .replace(/__ROOM_IMG_\d+__/g, ' [사진] ')
+        .replace(/<?pic\s+[^>\n]*?\bprompt\s*=\s*(?:"([^"]*)"|'([^']*)')(?:\s*\/?\s*>)?/gi, ' [사진] ')
         .split('\n')
         .map((line) => line.replace(/\s+/g, ' ').trim())
         .join('\n')
