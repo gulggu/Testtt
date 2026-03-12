@@ -29,7 +29,6 @@ import { initSns, openSnsPopup, triggerNpcPosting, triggerPendingCommentReaction
 import { initCalendar, openCalendarPopup } from './modules/calendar/calendar.js';
 import { initGifticon, openGifticonPopup, trackGifticonUsageFromCharacterMessage } from './modules/gifticon/gifticon.js';
 import { openMessengerRoomsPopup, appendExternalRoomMessage, buildRoomTranscriptText } from './modules/messenger-room/messenger-room.js';
-import { buildDirectImagePrompt } from './utils/image-tag-generator.js';
 import { generateBackendText } from './utils/backend-generation.js';
 import { runSdImageGeneration } from './utils/slash.js';
 import { scheduleChatCssRecovery } from './utils/chat-css-recovery.js';
@@ -67,6 +66,7 @@ const GROUP_CHAT_PREVIEW_NPC_TEXT = '민지: 나는 내 성격/말투대로만 �
 const GROUP_CHAT_DESCRIPTION_TEXT = '단톡 응답은 별도 메신저 방 컨텍스트로 취급되며, 응답자는 자신의 프로필/관계/말투만 유지하도록 강하게 고정됩니다.';
 const GROUP_CHAT_REPLY_DELAY_MIN_MS = 2500;
 const GROUP_CHAT_REPLY_DELAY_MAX_MS = 6500;
+const MESSENGER_GENERATED_IMAGE_TAG_REGEX = /<img\b[^>]*\bclass\s*=\s*["'][^"']*\bslm-msg-generated-image\b[^"']*["'][^>]*>/gi;
 const ROUTE_MODEL_KEY_BY_SOURCE = {
     openai: 'openai_model',
     claude: 'claude_model',
@@ -1198,14 +1198,9 @@ async function enrichGroupChatReplyContent(text, senderName, transcript) {
     PIC_TAG_REGEX.lastIndex = 0;
     const picMatches = [...normalizedSource.matchAll(PIC_TAG_REGEX)];
     let currentMes = normalizedSource;
-    const inlineImages = [];
-    let lastPromptUsed = '';
     if (picMatches.length > 0) {
         const limitedPicMatches = picMatches.slice(0, MAX_MESSENGER_IMAGES_PER_RESPONSE);
         const limitedSet = new Set(limitedPicMatches.map((match) => match.index));
-        const ctx = getContext();
-        const userName = ctx?.name1 || '';
-        const allContactsList = [...getContacts('character'), ...getContacts('chat')];
         let offset = 0;
         for (const match of picMatches) {
             const fullTag = match[0];
@@ -1214,22 +1209,11 @@ async function enrichGroupChatReplyContent(text, senderName, transcript) {
             let replacement = '';
             if (rawPrompt) {
                 if (limitedSet.has(match.index) && !isCallActive() && settings.messageImageGenerationMode) {
-                    const includeNames = [senderName];
-                    collectMentionedContactNames(`${transcript}\n${rawPrompt}`, allContactsList).forEach((name) => {
-                        if (name && !includeNames.includes(name)) includeNames.push(name);
-                    });
-                    const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
-                    if (userName && userHintRegex.test(rawPrompt.toLowerCase())) includeNames.push(userName);
                     const result = await processMessengerImageGeneration(rawPrompt, {
-                        charName: senderName,
-                        includeNames,
-                        contacts: allContactsList,
                         settings,
                     });
                     if (result.imageUrl) {
-                        inlineImages.push(result.imageUrl);
-                        lastPromptUsed = rawPrompt;
-                        replacement = fullTag;
+                        replacement = buildMessengerGeneratedImageTag(result.imageUrl, rawPrompt);
                     } else {
                         replacement = result.fallbackText;
                     }
@@ -1242,28 +1226,19 @@ async function enrichGroupChatReplyContent(text, senderName, transcript) {
             offset += replacement.length - fullTag.length;
         }
     }
-    const plainText = currentMes
-        .replace(PIC_TAG_REGEX, ' [사진] ')
-        .split('\n')
-        .map((line) => line.replace(/\s+/g, ' ').trim())
-        .join('\n')
-        .trim();
-    const emoticonMedia = extractAiSelectedEmoticonMedia(plainText || text, senderName);
-    const finalText = emoticonMedia.text || plainText || String(text || '').trim();
+    const emoticonMedia = extractAiSelectedEmoticonMedia(currentMes || text, senderName);
+    const finalText = emoticonMedia.text || currentMes || String(text || '').trim();
     const extra = normalizeInlineMessageExtra({
-        image_swipes: inlineImages,
-        image: inlineImages[inlineImages.length - 1] || '',
-        title: lastPromptUsed,
-        inline_image: inlineImages.length > 0,
         emoticon_images: emoticonMedia.emoticons,
     });
     const html = hasInlineMessageMedia(extra)
         ? ''
-        : wrapRichMessageHtml(replaceAiSelectedEmoticons(escapeHtml(finalText).replace(/\n/g, '<br>'), senderName));
+        : wrapRichMessageHtml(buildInlineDisplayHtml(finalText, senderName));
     return {
         text: finalText,
         html,
         extra,
+        rawText: normalizedSource,
     };
 }
 
@@ -1434,6 +1409,7 @@ async function executePlannedGroupChatTurn(plan) {
             text: reply.text || '',
             html: reply.html || '',
             extra: reply.extra,
+            rawText: reply.rawText || reply.text || '',
         });
     }
 }
@@ -3528,21 +3504,16 @@ async function generateMessageImageViaApi(imagePrompt) {
  * @returns {Promise<{imageUrl: string, fallbackText: string}>}
  */
 async function processMessengerImageGeneration(rawPrompt, options = {}) {
-    const { includeNames = [], contacts = [], settings = getSettings() } = options;
-    const tagResult = buildDirectImagePrompt(rawPrompt, {
-        includeNames,
-        contacts,
-        getAppearanceTagsByName,
-        tagWeight: Number(settings.tagWeight) || 0,
-    });
-    if (!tagResult.finalPrompt) {
+    const { settings = getSettings() } = options;
+    const normalizedPrompt = String(rawPrompt || '').trim();
+    if (!normalizedPrompt) {
         console.warn('[ST-LifeSim] 메신저 이미지 태그 생성 결과 없음');
         const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
         return { imageUrl: '', fallbackText: template.replace(/\{description\}/g, rawPrompt) };
     }
     try {
-        console.log('[ST-LifeSim] 메신저 이미지 생성 API 호출 시작, finalPrompt:', tagResult.finalPrompt.substring(0, 150));
-        const imageUrl = await generateMessageImageViaApi(tagResult.finalPrompt);
+        console.log('[ST-LifeSim] 메신저 이미지 생성 API 호출 시작, prompt:', normalizedPrompt.substring(0, 150));
+        const imageUrl = await generateMessageImageViaApi(normalizedPrompt);
         if (imageUrl) {
             return { imageUrl, fallbackText: '' };
         }
@@ -3559,6 +3530,47 @@ function waitForDelay(ms) {
 
 function wrapRichMessageHtml(html) {
     return String(html || '');
+}
+
+function isAllowedGeneratedImageUrl(url) {
+    const normalized = String(url || '').trim();
+    if (!normalized) return false;
+    const lower = normalized.toLowerCase();
+    return /^https?:\/\//.test(lower)
+        || /^blob:/.test(lower)
+        || /^data:image\//.test(lower);
+}
+
+function buildMessengerGeneratedImageTag(imageUrl, prompt = '') {
+    const normalizedUrl = String(imageUrl || '').trim();
+    if (!isAllowedGeneratedImageUrl(normalizedUrl)) return '';
+    const safeUrl = escapeHtml(normalizedUrl);
+    if (!safeUrl) return '';
+    const safePrompt = escapeHtml(String(prompt || '').trim() || 'generated-image');
+    return `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image">`;
+}
+
+function readMessengerImageTagAttribute(tag, attributeName) {
+    const pattern = new RegExp(`\\b${attributeName}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i');
+    const match = String(tag || '').match(pattern);
+    return String(match?.[1] || match?.[2] || '').trim();
+}
+
+function buildMessengerImageTagReplacementMap(text) {
+    const source = String(text || '');
+    const replacements = new Map();
+    MESSENGER_GENERATED_IMAGE_TAG_REGEX.lastIndex = 0;
+    for (const match of source.matchAll(MESSENGER_GENERATED_IMAGE_TAG_REGEX)) {
+        const originalTag = match[0];
+        const src = readMessengerImageTagAttribute(originalTag, 'src');
+        if (!src) continue;
+        const title = readMessengerImageTagAttribute(originalTag, 'title')
+            || readMessengerImageTagAttribute(originalTag, 'alt');
+        const safeTag = buildMessengerGeneratedImageTag(src, title);
+        if (!safeTag) continue;
+        replacements.set(originalTag, safeTag);
+    }
+    return replacements;
 }
 
 function normalizeInlineMessageExtra(extra = {}) {
@@ -3629,20 +3641,11 @@ function buildInlineMessageMediaHtml(extra, senderName) {
     return `<div class="slm-message-inline-media">${mediaHtml}</div>`;
 }
 
-function buildInlineDisplayHtml(text, senderName, extra = {}) {
-    const normalizedExtra = normalizeInlineMessageExtra(extra);
-    const emoticonExtract = extractAiSelectedEmoticonMedia(String(text || ''), senderName);
-    const strippedText = stripPicTagsForDisplay(emoticonExtract.text);
-    const textHtml = strippedText ? escapeHtml(strippedText).replace(/\n/g, '<br>') : '';
-    const mediaExtra = normalizeInlineMessageExtra({
-        ...normalizedExtra,
-        emoticon_images: normalizedExtra.emoticon_images.length > 0 ? normalizedExtra.emoticon_images : emoticonExtract.emoticons,
-    });
-    const mediaHtml = buildInlineMessageMediaHtml(mediaExtra, senderName);
-    if (!mediaHtml) {
-        return replaceAiSelectedEmoticons(escapeHtml(String(text || '')).replace(/\n/g, '<br>'), senderName);
-    }
-    return `<div class="slm-message-rich-content">${textHtml}${mediaHtml}</div>`;
+function buildInlineDisplayHtml(text, senderName) {
+    const sourceText = normalizeQuotesForPicTag(String(text || ''));
+    const tagReplacementMap = buildMessengerImageTagReplacementMap(sourceText);
+    const escapedText = escapeHtml(sourceText).replace(/\n/g, '<br>');
+    return replaceAiSelectedEmoticons(escapedText, senderName, tagReplacementMap);
 }
 
 async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
@@ -3701,10 +3704,6 @@ async function applyCharacterImageDisplayMode() {
 
         const charName = String(lastMsg.name || ctx?.name2 || '{{char}}');
         const msgIdx = Number(ctx.chat.length - 1);
-        const nextExtra = normalizeInlineMessageExtra(lastMsg.extra);
-        const processedPicTags = new Set(nextExtra.processed_pic_tags || []);
-        const originalExtra = normalizeInlineMessageExtra(nextExtra);
-
         // char의 응답에 <pic prompt="..."> 태그가 포함되어 있으면 그 자체가 이미지 생성 의도이므로,
         // 유저의 명시적 지시("사진 보내줘" 등) 없이도 이미지를 생성한다.
         const allowAutoImageGeneration = !isCallActive() && settings.messageImageGenerationMode;
@@ -3712,30 +3711,19 @@ async function applyCharacterImageDisplayMode() {
         if (allowAutoImageGeneration) {
             // ── ON 모드: 이미지 생성 API로 실제 이미지 생성 (순차적 UI 업데이트) ──
             // 응답 내 <pic prompt="...">의 직접 이미지 프롬프트를 추적해 Image API로 생성
-            const unprocessedPicMatches = picMatches.filter((match) => {
-                const fullTag = match[0];
+            const validPicMatches = picMatches.filter((match) => {
                 const rawPrompt = (match[1] || match[2] || '').trim();
-                if (!rawPrompt) return false;
-                // 같은 프롬프트라도 태그 표기(인용 부호/공백/형태)가 다르면 별도 의도로 처리해야 하므로,
-                // 오탐 중복 제거를 막기 위해 prompt+fullTag 조합 키를 사용한다.
-                const picTagKey = buildProcessedPicTagKey(rawPrompt, fullTag);
-                return !processedPicTags.has(picTagKey);
+                return Boolean(rawPrompt);
             });
-            if (unprocessedPicMatches.length === 0) {
+            if (validPicMatches.length === 0) {
                 return;
             }
             // 최대 이미지 수 제한
-            const limitedPicMatches = unprocessedPicMatches.slice(0, MAX_MESSENGER_IMAGES_PER_RESPONSE);
-            if (unprocessedPicMatches.length > MAX_MESSENGER_IMAGES_PER_RESPONSE) {
+            const limitedPicMatches = validPicMatches.slice(0, MAX_MESSENGER_IMAGES_PER_RESPONSE);
+            if (validPicMatches.length > MAX_MESSENGER_IMAGES_PER_RESPONSE) {
                 showToast(`📷 이미지 최대 ${MAX_MESSENGER_IMAGES_PER_RESPONSE}장까지 생성 가능합니다.`, 'warn', 2000);
             }
             showToast(`📷 ${limitedPicMatches.length}개 이미지 생성 중...`, 'info', 2000);
-            const userName = ctx?.name1 || '';
-            const allContactsList = [...getContacts('character'), ...getContacts('chat')];
-            const recentContextText = (Array.isArray(ctx.chat) ? ctx.chat : [])
-                .slice(-IMAGE_INTENT_CONTEXT_WINDOW)
-                .map(m => String(m?.mes || ''))
-                .join('\n');
             // 제한 내 이미지만 생성, 초과분은 텍스트 폴백
             const limitedSet = new Set(limitedPicMatches.map(m => m.index));
 
@@ -3748,43 +3736,24 @@ async function applyCharacterImageDisplayMode() {
                 const fullTag = match[0];
                 const rawPrompt = (match[1] || match[2] || '').trim();
                 const adjustedIndex = match.index + offset;
-                const picTagKey = buildProcessedPicTagKey(rawPrompt, fullTag);
 
                 let replacement;
                 if (!rawPrompt) {
                     replacement = '';
-                } else if (processedPicTags.has(picTagKey)) {
-                    // 이미 inline extra에 반영된 <pic> 태그는 그대로 두어
-                    // CHARACTER_MESSAGE_RENDERED 재호출 시 중복 이미지 생성되지 않게 막는다.
-                    replacement = fullTag;
                 } else if (!limitedSet.has(match.index)) {
                     // 최대 이미지 수를 초과한 매치는 텍스트 폴백
                     const template = settings.messageImageTextTemplate || DEFAULT_SETTINGS.messageImageTextTemplate;
                     replacement = template.replace(/\{description\}/g, rawPrompt);
                 } else {
-                    // 외부 파이프라인으로 이미지 생성 처리 (SNS 게시글 생성 로직 참고)
-                    const includeNames = [charName];
-                    collectMentionedContactNames(`${recentContextText}\n${rawPrompt}`, allContactsList).forEach((name) => {
-                        if (name && !includeNames.includes(name)) includeNames.push(name);
-                    });
-                    const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
-                    if (userName && userHintRegex.test(rawPrompt.toLowerCase())) {
-                        includeNames.push(userName);
-                    }
                     const result = await processMessengerImageGeneration(rawPrompt, {
-                        charName,
-                        includeNames,
-                        contacts: allContactsList,
                         settings,
                     });
                     if (result.imageUrl) {
-                        nextExtra.image_swipes.push(result.imageUrl);
-                        nextExtra.image = result.imageUrl;
-                        nextExtra.title = rawPrompt;
-                        nextExtra.inline_image = true;
-                        processedPicTags.add(picTagKey);
-                        nextExtra.processed_pic_tags = [...processedPicTags];
-                        replacement = fullTag;
+                        replacement = buildMessengerGeneratedImageTag(result.imageUrl, rawPrompt);
+                        if (!replacement) {
+                            console.warn('[ST-LifeSim] 메신저 이미지 URL 형식 거부됨:', String(result.imageUrl).slice(0, 120));
+                            replacement = result.fallbackText;
+                        }
                     } else {
                         replacement = result.fallbackText;
                     }
@@ -3797,12 +3766,19 @@ async function applyCharacterImageDisplayMode() {
 
                 // 매 생성마다 메시지 데이터 + UI를 즉시 업데이트하여 순차적으로 결과가 표시되도록 한다
                 lastMsg.mes = currentMes;
-                lastMsg.extra = normalizeInlineMessageExtra(nextExtra);
-                await updateRenderedMessageHtml(msgIdx, buildInlineDisplayHtml(currentMes, charName, lastMsg.extra), '이미지');
+                lastMsg.extra = normalizeInlineMessageExtra({
+                    ...lastMsg.extra,
+                    image_swipes: [],
+                    image: '',
+                    title: '',
+                    inline_image: false,
+                    processed_pic_tags: [],
+                });
+                await updateRenderedMessageHtml(msgIdx, buildInlineDisplayHtml(currentMes, charName), '이미지');
             }
 
             // 모든 이미지 처리 완료 후 채팅 저장
-            if (currentMes !== mes || generatedCount > 0 || didInlineMessageExtraChange(originalExtra, nextExtra)) {
+            if (currentMes !== mes || generatedCount > 0) {
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
@@ -3839,14 +3815,14 @@ async function applyCharacterImageDisplayMode() {
             if (updatedMes !== mes) {
                 lastMsg.mes = updatedMes;
                 lastMsg.extra = normalizeInlineMessageExtra({
-                    ...nextExtra,
+                    ...lastMsg.extra,
                     image_swipes: [],
                     image: '',
                     title: '',
                     inline_image: false,
                     processed_pic_tags: [],
                 });
-                await updateRenderedMessageHtml(msgIdx, buildInlineDisplayHtml(updatedMes, charName, lastMsg.extra), '이미지 텍스트');
+                await updateRenderedMessageHtml(msgIdx, buildInlineDisplayHtml(updatedMes, charName), '이미지 텍스트');
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
@@ -3884,7 +3860,7 @@ async function applyCharacterEmoticonDisplayMode() {
     });
     // DOM mesid는 숫자 인덱스를 사용하므로 lastMsg 참조와 별개로 마지막 메시지 인덱스를 구한다.
     const msgIdx = Number(ctx.chat.length - 1);
-    await updateRenderedMessageHtml(msgIdx, buildInlineDisplayHtml(mes, senderName, lastMsg.extra), '이모티콘');
+    await updateRenderedMessageHtml(msgIdx, buildInlineDisplayHtml(mes, senderName), '이모티콘');
     if (typeof ctx.saveChat === 'function') {
         await ctx.saveChat();
     }
