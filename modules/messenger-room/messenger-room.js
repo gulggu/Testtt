@@ -1309,7 +1309,7 @@ function renderRoomMessageBubbleContent(message, bubble) {
         const textHtml = buildRoomPlainMessageHtml(String(message?.text || ''));
         const mediaHtml = buildRoomInlineMediaHtml(extra, senderName);
         bubble.innerHTML = `<div class="slm-room-message-rich-content">${textHtml}${mediaHtml}</div>`;
-        bubble.classList.toggle('multiline', false);
+        bubble.classList.remove('multiline');
         bubble.classList.toggle('emoticon-only', !textHtml && extra.emoticon_images.length > 0 && extra.image_swipes.length === 0);
         return;
     }

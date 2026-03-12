@@ -3712,7 +3712,7 @@ async function applyCharacterImageDisplayMode() {
                 const fullTag = match[0];
                 const rawPrompt = (match[1] || match[2] || '').trim();
                 if (!rawPrompt) return false;
-                // Even with the same prompt, original tag text (인용 부호/공백/형태) can differ, so use prompt+fullTag as a composite key to prevent duplicate generation.
+                // 같은 프롬프트여도 원문 태그(인용 부호/공백/형태)가 다를 수 있어, 중복 생성을 막기 위해 prompt+fullTag 조합 키를 사용한다.
                 const picTagKey = `${rawPrompt}::${fullTag}`;
                 return !processedPicTags.has(picTagKey);
             });
