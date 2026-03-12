@@ -3848,6 +3848,8 @@ async function applyCharacterImageDisplayMode() {
             let currentMes = mes;
             let offset = 0; // 이전 치환으로 인한 누적 인덱스 오프셋
             let generatedCount = 0;
+            const generatedImageUrls = [];
+            let lastGeneratedPrompt = '';
 
             for (const match of picMatches) {
                 const fullTag = match[0];
@@ -3880,22 +3882,32 @@ async function applyCharacterImageDisplayMode() {
                         settings,
                     });
                     if (result.imageUrl) {
-                        replacement = buildGeneratedMessageImageHtml(result.imageUrl, rawPrompt);
+                        replacement = '';
+                        generatedImageUrls.push(result.imageUrl);
+                        lastGeneratedPrompt = rawPrompt;
+                        generatedCount++;
                     } else {
                         replacement = result.fallbackText;
                     }
-                    generatedCount++;
                 }
 
                 // 즉시 치환 적용 및 오프셋 갱신
                 currentMes = currentMes.slice(0, adjustedIndex) + replacement + currentMes.slice(adjustedIndex + fullTag.length);
                 offset += replacement.length - fullTag.length;
 
-                // 매 생성마다 메시지 데이터를 즉시 갱신해 생성 직후 새 이미지가 화면에 바로 반영되도록 한다.
-                // <img> 태그가 기본 렌더러에서 빈칸으로 소거되는 환경이 있어, 매번 확정 rich HTML로 직접 동기화한다.
                 lastMsg.mes = currentMes;
-                const renderedHtml = buildCharacterMessageRichHtml(currentMes, charName);
-                await refreshRenderedMessage(msgIdx, lastMsg, renderedHtml, '이미지');
+                if (generatedImageUrls.length > 0) {
+                    if (!lastMsg.extra || typeof lastMsg.extra !== 'object') lastMsg.extra = {};
+                    if (!Array.isArray(lastMsg.extra.image_swipes)) lastMsg.extra.image_swipes = [];
+                    lastMsg.extra.image_swipes = [...lastMsg.extra.image_swipes, ...generatedImageUrls];
+                    lastMsg.extra.image = generatedImageUrls[generatedImageUrls.length - 1];
+                    lastMsg.extra.inline_image = true;
+                    if (lastGeneratedPrompt) {
+                        lastMsg.extra.title = lastGeneratedPrompt;
+                    }
+                    generatedImageUrls.length = 0;
+                }
+                await refreshRenderedMessage(msgIdx, lastMsg, null, '이미지', { skipDirectHtmlSync: true });
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
