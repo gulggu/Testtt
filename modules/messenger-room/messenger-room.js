@@ -1073,7 +1073,9 @@ async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
         }
     }
     const plainText = processedText
-        .replace(/<?pic\s+[^>\n]*?\bprompt\s*=\s*(?:"([^"]*)"|'([^']*)')(?:\s*\/?\s*>)?/gi, ' [사진] ')
+        // INLINE 성공 케이스는 본문에 [사진] 텍스트를 남기지 않고 태그만 제거한다.
+        // (실제 이미지는 extra.image_swipes 기반으로 버블 내부에 렌더링)
+        .replace(/<?pic\s+[^>\n]*?\bprompt\s*=\s*(?:"([^"]*)"|'([^']*)')(?:\s*\/?\s*>)?/gi, ' ')
         .split('\n')
         .map((line) => line.replace(/\s+/g, ' ').trim())
         .join('\n')
