@@ -1088,6 +1088,8 @@ async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
     });
     const hasInlineMedia = hasRoomInlineMedia({ extra });
     const normalizedText = emoticonMedia.text || (plainText || normalizeRoomPromptText(rawText));
+    // inline 미디어가 있으면 HTML 문자열을 저장하지 않고,
+    // renderRoomMessageBubbleContent가 text + extra 메타데이터로 다시 렌더링한다.
     const html = hasInlineMedia ? '' : buildRoomMessageHtml(normalizedText, senderName);
     return {
         text: normalizedText,
@@ -1304,7 +1306,7 @@ function renderRoomMessageBubbleContent(message, bubble) {
     if (hasRoomInlineMedia({ extra })) {
         const textHtml = buildRoomPlainMessageHtml(String(message?.text || ''));
         const mediaHtml = buildRoomInlineMediaHtml(extra, senderName);
-        bubble.innerHTML = `${textHtml}${textHtml && mediaHtml ? '<br>' : ''}${mediaHtml}`;
+        bubble.innerHTML = `${textHtml}${mediaHtml}`;
         bubble.classList.toggle('multiline', Boolean(textHtml) && isSegmentedRoomMessageHtml(textHtml));
         bubble.classList.toggle('emoticon-only', !textHtml && extra.emoticon_images.length > 0 && extra.image_swipes.length === 0);
         return;

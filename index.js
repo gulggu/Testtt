@@ -3589,6 +3589,18 @@ function hasInlineMessageMedia(extra = {}) {
     return normalized.inline_image || normalized.emoticon_images.length > 0;
 }
 
+function didInlineMessageExtraChange(beforeExtra = {}, afterExtra = {}) {
+    const before = normalizeInlineMessageExtra(beforeExtra);
+    const after = normalizeInlineMessageExtra(afterExtra);
+    return before.inline_image !== after.inline_image
+        || before.image !== after.image
+        || before.title !== after.title
+        || before.image_swipes.join('\n') !== after.image_swipes.join('\n')
+        || before.processed_pic_tags.join('\n') !== after.processed_pic_tags.join('\n')
+        || before.emoticon_images.map((item) => `${item.name}::${item.url}`).join('\n')
+            !== after.emoticon_images.map((item) => `${item.name}::${item.url}`).join('\n');
+}
+
 function stripPicTagsForDisplay(text) {
     return normalizeQuotesForPicTag(String(text || ''))
         .replace(PIC_TAG_REGEX, ' ')
@@ -3626,7 +3638,7 @@ function buildInlineDisplayHtml(text, senderName, extra = {}) {
     if (!mediaHtml) {
         return replaceAiSelectedEmoticons(escapeHtml(String(text || '')).replace(/\n/g, '<br>'), senderName);
     }
-    return `${textHtml}${textHtml && mediaHtml ? '<br>' : ''}${mediaHtml}`;
+    return `${textHtml}${mediaHtml}`;
 }
 
 async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
@@ -3687,6 +3699,7 @@ async function applyCharacterImageDisplayMode() {
         const msgIdx = Number(ctx.chat.length - 1);
         const nextExtra = normalizeInlineMessageExtra(lastMsg.extra);
         const processedPicTags = new Set(nextExtra.processed_pic_tags || []);
+        const originalExtra = normalizeInlineMessageExtra(nextExtra);
 
         // char의 응답에 <pic prompt="..."> 태그가 포함되어 있으면 그 자체가 이미지 생성 의도이므로,
         // 유저의 명시적 지시("사진 보내줘" 등) 없이도 이미지를 생성한다.
@@ -3719,12 +3732,14 @@ async function applyCharacterImageDisplayMode() {
                 const fullTag = match[0];
                 const rawPrompt = (match[1] || match[2] || '').trim();
                 const adjustedIndex = match.index + offset;
-                const picTagKey = `${match.index}:${fullTag}`;
+                const picTagKey = `${rawPrompt}::${fullTag}`;
 
                 let replacement;
                 if (!rawPrompt) {
                     replacement = '';
                 } else if (processedPicTags.has(picTagKey)) {
+                    // 이미 inline extra에 반영된 <pic> 태그는 그대로 두어
+                    // CHARACTER_MESSAGE_RENDERED 재호출 시 중복 이미지 생성되지 않게 막는다.
                     replacement = fullTag;
                 } else if (!limitedSet.has(match.index)) {
                     // 최대 이미지 수를 초과한 매치는 텍스트 폴백
@@ -3771,7 +3786,7 @@ async function applyCharacterImageDisplayMode() {
             }
 
             // 모든 이미지 처리 완료 후 채팅 저장
-            if (currentMes !== mes || generatedCount > 0) {
+            if (currentMes !== mes || generatedCount > 0 || didInlineMessageExtraChange(originalExtra, nextExtra)) {
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }

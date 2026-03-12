@@ -330,6 +330,7 @@ export function extractAiSelectedEmoticonMedia(text, senderName = '{{char}}') {
     const cleanedText = keptLines
         .join('\n')
         .replace(/\n{3,}/g, '\n\n')
+        .replace(/[ \t]+\n/g, '\n')
         .trim();
 
     return {
