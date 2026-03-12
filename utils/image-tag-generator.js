@@ -399,7 +399,14 @@ function resolveImagePromptContext(rawPrompt, options = {}) {
         ? options.getAppearanceTagsByName
         : () => '';
     const includeNames = Array.isArray(options.includeNames) ? options.includeNames : [];
+    const forceIncludeNames = Array.isArray(options.forceIncludeNames) ? options.forceIncludeNames : [];
     const tagWeight = Number(options.tagWeight) || 0;
+    const rawPromptText = String(rawPrompt || '');
+    const explicitAppearanceRefs = new Set(
+        Array.from(rawPromptText.matchAll(/{{appearanceTag:\s*([^}]+?)\s*}}/gi))
+            .map((match) => String(match[1] || '').trim().toLowerCase())
+            .filter(Boolean),
+    );
 
     const appearanceVarMap = options.appearanceVarMap || {};
     if (Object.keys(appearanceVarMap).length === 0) {
@@ -415,9 +422,15 @@ function resolveImagePromptContext(rawPrompt, options = {}) {
             const tags = String(getAppearanceFn(cleanName) || '').trim();
             if (tags) appearanceVarMap[cleanName] = tags;
         }
+        for (const name of forceIncludeNames) {
+            const cleanName = String(name || '').trim();
+            if (!cleanName || appearanceVarMap[cleanName]) continue;
+            const tags = String(getAppearanceFn(cleanName) || '').trim();
+            if (tags) appearanceVarMap[cleanName] = tags;
+        }
     }
 
-    const resolvedRawPrompt = resolveAppearanceTagRefs(rawPrompt, appearanceVarMap);
+    const resolvedRawPrompt = resolveAppearanceTagRefs(rawPromptText, appearanceVarMap);
     const textLower = resolvedRawPrompt.toLowerCase();
     const matched = [];
     const matchedNamesLower = new Set();
@@ -432,11 +445,34 @@ function resolveImagePromptContext(rawPrompt, options = {}) {
         return textLower.includes(norm);
     }
 
+    for (const name of forceIncludeNames) {
+        const cleanName = String(name).trim();
+        if (!cleanName) continue;
+        const normalized = cleanName.toLowerCase();
+        if (matchedNamesLower.has(normalized)) continue;
+        const contact = allContacts.find(c =>
+            String(c.name || '').trim().toLowerCase() === normalized
+            || String(c.displayName || '').trim().toLowerCase() === normalized
+            || String(c.subName || '').trim().toLowerCase() === normalized
+        );
+        const contactName = String(contact?.name || cleanName).trim();
+        matchedNamesLower.add(normalized);
+        if (contactName) matchedNamesLower.add(contactName.toLowerCase());
+        const appearance = getAppearanceFn(contactName || cleanName);
+        matched.push({
+            name: contactName || cleanName,
+            appearanceTags: String(appearance || '').trim(),
+        });
+    }
+
     for (const name of includeNames) {
         const cleanName = String(name).trim();
         if (!cleanName) continue;
         const normalized = cleanName.toLowerCase();
         if (matchedNamesLower.has(normalized)) continue;
+        // includeNames are prompt-scoped hints only: keep them only when the prompt
+        // explicitly references their appearance tag variable or mentions the name itself.
+        if (!explicitAppearanceRefs.has(normalized) && !isNameMentioned(cleanName)) continue;
         const contact = allContacts.find(c =>
             String(c.name || '').trim().toLowerCase() === normalized
             || String(c.displayName || '').trim().toLowerCase() === normalized
@@ -520,9 +556,9 @@ export function buildDirectImagePrompt(rawPrompt, options = {}) {
         .filter(Boolean)
         .join(', ');
     const matchedAppearanceGroups = buildMatchedAppearanceGroups(matched);
-    const appearanceGroups = matchedAppearanceGroups.length > 0
-        ? matchedAppearanceGroups
-        : mergeAppearanceGroupsWithMatched(uniquePromptBlocks, matched);
+    const appearanceGroups = uniquePromptBlocks.length > 0
+        ? mergeAppearanceGroupsWithMatched(uniquePromptBlocks, matched)
+        : matchedAppearanceGroups;
     const filteredSceneTags = stripAppearanceTagsFromScene(sceneOnly, appearanceGroups);
     const finalPrompt = buildImageApiPrompt(filteredSceneTags, appearanceGroups, { tagWeight });
     if (!finalPrompt && appearanceGroups.length === 0) return emptyResult;
@@ -547,6 +583,7 @@ export function buildDirectImagePrompt(rawPrompt, options = {}) {
  * @param {string} rawPrompt - Raw image description / prompt
  * @param {Object} options
  * @param {string[]} [options.includeNames] - Hint names to check for mention (still requires detection in prompt)
+ * @param {string[]} [options.forceIncludeNames] - Names that should always be included in appearance matching
  * @param {Array<{name: string, displayName?: string, subName?: string, description?: string, appearanceTags?: string}>} [options.contacts] - All available contacts
  * @param {(name: string) => string} [options.getAppearanceTagsByName] - Lookup function for appearance tags
  * @param {{ [name: string]: string }} [options.appearanceVarMap] - Pre-built appearance tag variable map
@@ -624,10 +661,9 @@ export async function generateImageTags(rawPrompt, options = {}) {
     // ── Step 3: Collect appearance tag groups ──
     // Prefer AI-selected appearance blocks; fall back to all matched characters
     const matchedAppearanceGroups = buildMatchedAppearanceGroups(matched);
-    let appearanceGroups = matchedAppearanceGroups;
-    if (appearanceGroups.length === 0 && uniqueAiBlocks.length > 0) {
-        appearanceGroups = mergeAppearanceGroupsWithMatched(uniqueAiBlocks, matched);
-    }
+    let appearanceGroups = uniqueAiBlocks.length > 0
+        ? mergeAppearanceGroupsWithMatched(uniqueAiBlocks, matched)
+        : matchedAppearanceGroups;
 
     // ── Step 4: Build final prompt ──
     // Result: "scene tags | Character 1: appearance1 | Character 2: appearance2"

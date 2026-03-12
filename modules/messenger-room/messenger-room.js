@@ -983,14 +983,16 @@ async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
             let replacement = '';
             if (rawPrompt) {
                 if (settings.messageImageGenerationMode) {
-                    const includeNames = [senderName];
+                    const forceIncludeNames = [senderName];
+                    const includeNames = [];
                     collectMentionedRoomContactNames(`${transcript}\n${rawPrompt}`, allContactsList).forEach((name) => {
-                        if (name && !includeNames.includes(name)) includeNames.push(name);
+                        if (name && !forceIncludeNames.includes(name) && !includeNames.includes(name)) includeNames.push(name);
                     });
                     const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
-                    if (userName && userHintRegex.test(rawPrompt.toLowerCase())) includeNames.push(userName);
+                    if (userName && userHintRegex.test(rawPrompt.toLowerCase()) && !forceIncludeNames.includes(userName)) forceIncludeNames.push(userName);
                     const tagResult = buildDirectImagePrompt(rawPrompt, {
                         includeNames,
+                        forceIncludeNames,
                         contacts: allContactsList,
                         getAppearanceTagsByName,
                         tagWeight: settings.tagWeight,

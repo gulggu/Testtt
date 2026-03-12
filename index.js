@@ -1213,15 +1213,17 @@ async function enrichGroupChatReplyContent(text, senderName, transcript) {
             let replacement = '';
             if (rawPrompt) {
                 if (limitedSet.has(match.index) && !isCallActive() && settings.messageImageGenerationMode) {
-                    const includeNames = [senderName];
+                    const forceIncludeNames = [senderName];
+                    const includeNames = [];
                     collectMentionedContactNames(`${transcript}\n${rawPrompt}`, allContactsList).forEach((name) => {
-                        if (name && !includeNames.includes(name)) includeNames.push(name);
+                        if (name && !forceIncludeNames.includes(name) && !includeNames.includes(name)) includeNames.push(name);
                     });
                     const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
-                    if (userName && userHintRegex.test(rawPrompt.toLowerCase())) includeNames.push(userName);
+                    if (userName && userHintRegex.test(rawPrompt.toLowerCase()) && !forceIncludeNames.includes(userName)) forceIncludeNames.push(userName);
                     const result = await processMessengerImageGeneration(rawPrompt, {
                         charName: senderName,
                         includeNames,
+                        forceIncludeNames,
                         contacts: allContactsList,
                         settings,
                     });
@@ -3499,15 +3501,17 @@ async function generateMessageImageViaApi(imagePrompt) {
  * @param {string} rawPrompt - 원본 이미지 설명
  * @param {Object} options
  * @param {string} options.charName - 캐릭터 이름
- * @param {string[]} [options.includeNames] - 포함할 이름 목록
+ * @param {string[]} [options.includeNames] - 프롬프트 내 실제 언급 여부를 다시 확인할 후보 이름 목록
+ * @param {string[]} [options.forceIncludeNames] - 프롬프트에 이름이 없어도 반드시 포함할 이름 목록
  * @param {Array} [options.contacts] - 연락처 목록
  * @param {Object} [options.settings] - 확장 설정
  * @returns {Promise<{imageUrl: string, fallbackText: string}>}
  */
 async function processMessengerImageGeneration(rawPrompt, options = {}) {
-    const { includeNames = [], contacts = [], settings = getSettings() } = options;
+    const { includeNames = [], forceIncludeNames = [], contacts = [], settings = getSettings() } = options;
     const tagResult = buildDirectImagePrompt(rawPrompt, {
         includeNames,
+        forceIncludeNames,
         contacts,
         getAppearanceTagsByName,
         tagWeight: Number(settings.tagWeight) || 0,
@@ -3635,17 +3639,19 @@ async function applyCharacterImageDisplayMode() {
                     replacement = template.replace(/\{description\}/g, rawPrompt);
                 } else {
                     // 외부 파이프라인으로 이미지 생성 처리 (SNS 게시글 생성 로직 참고)
-                    const includeNames = [charName];
+                    const forceIncludeNames = [charName];
+                    const includeNames = [];
                     collectMentionedContactNames(`${recentContextText}\n${rawPrompt}`, allContactsList).forEach((name) => {
-                        if (name && !includeNames.includes(name)) includeNames.push(name);
+                        if (name && !forceIncludeNames.includes(name) && !includeNames.includes(name)) includeNames.push(name);
                     });
                     const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
                     if (userName && userHintRegex.test(rawPrompt.toLowerCase())) {
-                        includeNames.push(userName);
+                        if (!forceIncludeNames.includes(userName)) forceIncludeNames.push(userName);
                     }
                     const result = await processMessengerImageGeneration(rawPrompt, {
                         charName,
                         includeNames,
+                        forceIncludeNames,
                         contacts: allContactsList,
                         settings,
                     });
