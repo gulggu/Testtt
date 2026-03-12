@@ -3540,6 +3540,58 @@ function wrapRichMessageHtml(html) {
     return String(html || '');
 }
 
+function getRenderedMessageTextElement(msgIdx) {
+    if (!Number.isFinite(msgIdx) || msgIdx < 0) return null;
+    const selectors = [
+        `.mes[mesid="${msgIdx}"] .mes_text`,
+        `div.mes[mesid="${msgIdx}"] .mes_text`,
+        `#chat .mes[mesid="${msgIdx}"] .mes_text`,
+    ];
+    return selectors
+        .map(selector => document.querySelector(selector))
+        .find(Boolean) || null;
+}
+
+function buildCharacterMessageRichHtml(text, senderName = '{{char}}') {
+    const mediaPlaceholders = new Map();
+    let mediaCounter = 0;
+    const source = String(text || '').replace(/<img\b[^>]*(?:data-slm-pic-id|data-slm-emoticon)[^>]*>/gi, (match) => {
+        const placeholder = `__SLM_MEDIA_${mediaCounter++}__`;
+        mediaPlaceholders.set(placeholder, match);
+        return placeholder;
+    });
+    let richHtml = replaceAiSelectedEmoticons(escapeHtml(source).replace(/\n/g, '<br>'), senderName);
+    mediaPlaceholders.forEach((mediaHtml, placeholder) => {
+        richHtml = richHtml.replace(new RegExp(escapeRegex(placeholder), 'g'), mediaHtml);
+    });
+    return wrapRichMessageHtml(richHtml);
+}
+
+function replaceRenderedPicTag(renderedHtml, fullTag, replacementHtml) {
+    const source = String(renderedHtml || '');
+    const normalizedTag = normalizeQuotesForPicTag(String(fullTag || ''));
+    if (!source || !normalizedTag) return source;
+    const candidates = [
+        escapeHtml(normalizedTag),
+        normalizedTag,
+    ].filter(Boolean);
+    let updated = source;
+    candidates.forEach((candidate) => {
+        updated = updated.replace(new RegExp(escapeRegex(candidate), 'g'), replacementHtml);
+    });
+    return updated;
+}
+
+function getExistingOrBuiltRenderedHtml(msgIdx, text, senderName = '{{char}}') {
+    return getRenderedMessageTextElement(msgIdx)?.innerHTML || buildCharacterMessageRichHtml(text, senderName);
+}
+
+function usePatchedRenderedHtml(patchedRenderedHtml, previousRenderedHtml, text, senderName = '{{char}}') {
+    return patchedRenderedHtml !== previousRenderedHtml
+        ? patchedRenderedHtml
+        : buildCharacterMessageRichHtml(text, senderName);
+}
+
 function getNativeUpdateMessageBlock() {
     const nativeUpdate =
         globalThis?.SillyTavern?.updateMessageBlock
@@ -3562,16 +3614,9 @@ async function emitMessageRenderLifecycle(ctx, msgIdx) {
 
 async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
     if (!Number.isFinite(msgIdx) || msgIdx < 0) return false;
-    const selectors = [
-        `.mes[mesid="${msgIdx}"] .mes_text`,
-        `div.mes[mesid="${msgIdx}"] .mes_text`,
-        `#chat .mes[mesid="${msgIdx}"] .mes_text`,
-    ];
     for (let attempt = 0; attempt < 6; attempt++) {
         try {
-            const mesTextEl = selectors
-                .map(selector => document.querySelector(selector))
-                .find(Boolean);
+            const mesTextEl = getRenderedMessageTextElement(msgIdx);
             if (mesTextEl) {
                 mesTextEl.innerHTML = wrapRichMessageHtml(html);
                 return true;
@@ -3588,15 +3633,17 @@ async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
 
 async function refreshRenderedMessage(msgIdx, message, html, logLabel = '메시지') {
     const nativeUpdateFn = getNativeUpdateMessageBlock();
+    let nativeUpdated = false;
     if (nativeUpdateFn && message) {
         try {
             nativeUpdateFn(msgIdx, message);
-            return true;
+            nativeUpdated = true;
         } catch (err) {
             console.warn(`[ST-LifeSim] ${logLabel} 기본 렌더러 갱신 실패, 직접 DOM 갱신으로 대체합니다:`, err);
         }
     }
-    return updateRenderedMessageHtml(msgIdx, html, logLabel);
+    const domUpdated = await updateRenderedMessageHtml(msgIdx, html, logLabel);
+    return nativeUpdated || domUpdated;
 }
 
 /**
@@ -3653,6 +3700,7 @@ async function applyCharacterImageDisplayMode() {
 
             // 순차적 처리: 각 이미지를 생성할 때마다 즉시 메시지와 UI를 업데이트한다
             let currentMes = mes;
+            let renderedHtml = getExistingOrBuiltRenderedHtml(msgIdx, mes, charName);
             let offset = 0; // 이전 치환으로 인한 누적 인덱스 오프셋
             let generatedCount = 0;
 
@@ -3697,10 +3745,15 @@ async function applyCharacterImageDisplayMode() {
                 // 즉시 치환 적용 및 오프셋 갱신
                 currentMes = currentMes.slice(0, adjustedIndex) + replacement + currentMes.slice(adjustedIndex + fullTag.length);
                 offset += replacement.length - fullTag.length;
+                const renderedReplacement = /^\s*<img\b/i.test(replacement)
+                    ? replacement
+                    : escapeHtml(replacement).replace(/\n/g, '<br>');
+                const patchedRenderedHtml = replaceRenderedPicTag(renderedHtml, fullTag, renderedReplacement);
+                renderedHtml = usePatchedRenderedHtml(patchedRenderedHtml, renderedHtml, currentMes, charName);
 
                 // 매 생성마다 메시지 데이터 + UI를 즉시 업데이트하여 순차적으로 결과가 표시되도록 한다
-                lastMsg.mes = wrapRichMessageHtml(currentMes);
-                await refreshRenderedMessage(msgIdx, lastMsg, currentMes, '이미지');
+                lastMsg.mes = currentMes;
+                await refreshRenderedMessage(msgIdx, lastMsg, renderedHtml, '이미지');
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
@@ -3731,14 +3784,22 @@ async function applyCharacterImageDisplayMode() {
 
             // 역순으로 치환하여 인덱스 오프셋 문제를 방지한다
             let updatedMes = mes;
+            let renderedHtml = getExistingOrBuiltRenderedHtml(msgIdx, mes, charName);
             for (let i = replacements.length - 1; i >= 0; i--) {
                 const { index, length, replacement } = replacements[i];
+                const fullTag = mes.slice(index, index + length);
                 updatedMes = updatedMes.slice(0, index) + replacement + updatedMes.slice(index + length);
+                const patchedRenderedHtml = replaceRenderedPicTag(
+                    renderedHtml,
+                    fullTag,
+                    escapeHtml(replacement).replace(/\n/g, '<br>'),
+                );
+                renderedHtml = usePatchedRenderedHtml(patchedRenderedHtml, renderedHtml, updatedMes, charName);
             }
 
             if (updatedMes !== mes) {
-                lastMsg.mes = wrapRichMessageHtml(updatedMes);
-                await refreshRenderedMessage(msgIdx, lastMsg, updatedMes, '이미지 텍스트');
+                lastMsg.mes = updatedMes;
+                await refreshRenderedMessage(msgIdx, lastMsg, renderedHtml, '이미지 텍스트');
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
@@ -3771,10 +3832,14 @@ async function applyCharacterEmoticonDisplayMode() {
     const updatedMes = replaceAiSelectedEmoticons(mes, senderName);
     if (updatedMes === mes) return;
 
-    lastMsg.mes = wrapRichMessageHtml(updatedMes);
     // DOM mesid는 숫자 인덱스를 사용하므로 lastMsg 참조와 별개로 마지막 메시지 인덱스를 구한다.
     const msgIdx = Number(ctx.chat.length - 1);
-    await refreshRenderedMessage(msgIdx, lastMsg, updatedMes, '이모티콘');
+    const renderedMessageEl = getRenderedMessageTextElement(msgIdx);
+    const renderedHtml = renderedMessageEl?.innerHTML
+        ? replaceAiSelectedEmoticons(renderedMessageEl.innerHTML, senderName)
+        : getExistingOrBuiltRenderedHtml(msgIdx, updatedMes, senderName);
+    lastMsg.mes = updatedMes;
+    await refreshRenderedMessage(msgIdx, lastMsg, renderedHtml, '이모티콘');
     if (typeof ctx.saveChat === 'function') {
         await ctx.saveChat();
     }

@@ -176,7 +176,7 @@ export async function runSdImageGeneration(prompt, options = {}) {
     const retries = Math.max(0, Number(options.retries) || 0);
     const retryDelayMs = Math.max(0, Number(options.retryDelayMs) || 450);
     const timeoutMs = Math.max(1000, Number(options.timeoutMs) || 25000);
-    const command = `/sd quiet=true ${trimmedPrompt}`;
+    const command = `/sd quiet=true lock=off ${trimmedPrompt}`;
     const runOnce = async () => {
         if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
             return await ctx.executeSlashCommandsWithOptions(command, { showOutput: false });

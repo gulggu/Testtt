@@ -212,7 +212,7 @@ function buildEmoticonHtml(emoticon, senderName) {
     const safeUrl = escapeHtml(emoticonUrl);
     const safeSenderName = escapeHtml(senderName || '{{char}}');
     const label = `${safeSenderName}이(가) ${safeName} 이모티콘을 보냈습니다.`;
-    return `<img src="${safeUrl}" alt="${safeName}" aria-label="${label}" style="width:${size}px;height:${size}px;object-fit:contain;display:inline-block;vertical-align:middle;border-radius:${radius}px">`;
+    return `<img src="${safeUrl}" alt="${safeName}" aria-label="${label}" class="slm-emoticon-img" data-slm-emoticon="true" style="width:${size}px;height:${size}px;object-fit:contain;display:inline-block;vertical-align:middle;border-radius:${radius}px">`;
 }
 
 export function buildEmoticonMessageHtml(emoticon, senderName = getCurrentCharName() || '{{char}}') {
