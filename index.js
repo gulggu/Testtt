@@ -3743,10 +3743,11 @@ async function applyCharacterImageDisplayMode() {
                 currentMes = currentMes.slice(0, adjustedIndex) + replacement + currentMes.slice(adjustedIndex + fullTag.length);
                 offset += replacement.length - fullTag.length;
 
-                // 매 생성마다 메시지 데이터와 기본 렌더러를 즉시 갱신해
-                // SillyTavern이 이미 적용한 .mes_text 마크업/CSS를 그대로 유지한다.
+                // 매 생성마다 메시지 데이터와 렌더링 HTML을 즉시 갱신해
+                // 생성 직후 새 이미지가 화면에 바로 반영되도록 한다.
                 lastMsg.mes = currentMes;
-                await refreshRenderedMessage(msgIdx, lastMsg, null, '이미지', { skipDirectHtmlSync: true });
+                const renderedHtml = buildCharacterMessageRichHtml(currentMes, charName);
+                await refreshRenderedMessage(msgIdx, lastMsg, renderedHtml, '이미지');
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
@@ -3784,7 +3785,8 @@ async function applyCharacterImageDisplayMode() {
 
             if (updatedMes !== mes) {
                 lastMsg.mes = updatedMes;
-                await refreshRenderedMessage(msgIdx, lastMsg, null, '이미지 텍스트', { skipDirectHtmlSync: true });
+                const renderedHtml = buildCharacterMessageRichHtml(updatedMes, charName);
+                await refreshRenderedMessage(msgIdx, lastMsg, renderedHtml, '이미지 텍스트');
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
