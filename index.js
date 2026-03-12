@@ -3540,6 +3540,19 @@ function wrapRichMessageHtml(html) {
     return String(html || '');
 }
 
+async function emitMessageRenderLifecycle(ctx, msgIdx) {
+    if (!Number.isFinite(msgIdx) || msgIdx < 0) return;
+    const evSrc = ctx?.eventSource;
+    const eventTypes = ctx?.eventTypes || ctx?.event_types;
+    if (!evSrc || typeof evSrc.emit !== 'function' || !eventTypes) return;
+    if (eventTypes.MESSAGE_UPDATED) {
+        await evSrc.emit(eventTypes.MESSAGE_UPDATED, msgIdx);
+    }
+    if (eventTypes.MESSAGE_RENDERED) {
+        await evSrc.emit(eventTypes.MESSAGE_RENDERED, msgIdx);
+    }
+}
+
 async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
     if (!Number.isFinite(msgIdx) || msgIdx < 0) return false;
     const selectors = [
@@ -3675,6 +3688,7 @@ async function applyCharacterImageDisplayMode() {
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
+                await emitMessageRenderLifecycle(ctx, msgIdx);
             }
             if (generatedCount > 0) {
                 showToast(`📷 이미지 생성 완료`, 'success', 1500);
@@ -3711,6 +3725,7 @@ async function applyCharacterImageDisplayMode() {
                 if (typeof ctx.saveChat === 'function') {
                     await ctx.saveChat();
                 }
+                await emitMessageRenderLifecycle(ctx, msgIdx);
             }
         }
     } finally {
