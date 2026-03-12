@@ -3844,10 +3844,12 @@ async function applyCharacterImageDisplayMode() {
             // 제한 내 이미지만 생성, 초과분은 텍스트 폴백
             const limitedSet = new Set(limitedPicMatches.map(m => m.index));
 
-            // 순차적 처리: 각 이미지를 생성할 때마다 즉시 메시지와 UI를 업데이트한다
+            // 순차적 처리: 각 이미지를 생성한 뒤 치환 결과를 누적하고 마지막에 한 번에 UI를 갱신한다
             let currentMes = mes;
             let offset = 0; // 이전 치환으로 인한 누적 인덱스 오프셋
             let generatedCount = 0;
+            const generatedImageUrls = [];
+            let latestSuccessfulPrompt = '';
 
             for (const match of picMatches) {
                 const fullTag = match[0];
@@ -3880,30 +3882,39 @@ async function applyCharacterImageDisplayMode() {
                         settings,
                     });
                     if (result.imageUrl) {
-                        replacement = buildGeneratedMessageImageHtml(result.imageUrl, rawPrompt);
+                        replacement = '';
+                        generatedImageUrls.push(result.imageUrl);
+                        latestSuccessfulPrompt = rawPrompt;
+                        generatedCount++;
                     } else {
                         replacement = result.fallbackText;
                     }
-                    generatedCount++;
                 }
 
                 // 즉시 치환 적용 및 오프셋 갱신
                 currentMes = currentMes.slice(0, adjustedIndex) + replacement + currentMes.slice(adjustedIndex + fullTag.length);
                 offset += replacement.length - fullTag.length;
-
-                // 매 생성마다 메시지 데이터를 즉시 갱신해 생성 직후 새 이미지가 화면에 바로 반영되도록 한다.
-                // 이때 기본 렌더러가 만든 .mes_text 구조는 유지하고 생성 미디어 태그만 복원해 기존 텍스트 스타일 깨짐을 막는다.
-                lastMsg.mes = currentMes;
-                // renderedHtml을 덮어쓰지 않고 escaped media만 hydrate한다.
-                await refreshRenderedMessage(msgIdx, lastMsg, null, '이미지', { syncEscapedMediaOnly: true });
-                if (typeof ctx.saveChat === 'function') {
-                    await ctx.saveChat();
-                }
-                await emitMessageRenderLifecycle(ctx, msgIdx);
             }
 
+            lastMsg.mes = currentMes;
+            if (generatedImageUrls.length > 0) {
+                if (!lastMsg.extra || typeof lastMsg.extra !== 'object') lastMsg.extra = {};
+                if (!Array.isArray(lastMsg.extra.image_swipes)) lastMsg.extra.image_swipes = [];
+                lastMsg.extra.image_swipes.push(...generatedImageUrls);
+                lastMsg.extra.image = generatedImageUrls.at(-1) || '';
+                lastMsg.extra.inline_image = true;
+                if (latestSuccessfulPrompt) {
+                    lastMsg.extra.title = latestSuccessfulPrompt;
+                }
+            }
+            await refreshRenderedMessage(msgIdx, lastMsg, null, '이미지', { skipDirectHtmlSync: true });
+            if (typeof ctx.saveChat === 'function') {
+                await ctx.saveChat();
+            }
+            await emitMessageRenderLifecycle(ctx, msgIdx);
+
             if (generatedCount > 0) {
-                showToast(`📷 이미지 생성 완료`, 'success', 1500);
+                showToast(`📷 이미지 생성 완료 (${generatedCount}개)`, 'success', 1500);
             }
         } else {
             // ── OFF 모드: 줄글 텍스트로 변환 ──
