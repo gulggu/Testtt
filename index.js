@@ -3438,6 +3438,10 @@ function normalizeQuotesForPicTag(text) {
         .replace(/`(<?\s*pic\s+[^`\n]*?prompt\s*=\s*(?:"[^"]*"|'[^']*')(?:\s*\/?\s*>)?)`/gi, '$1');
 }
 
+function buildProcessedPicTagKey(rawPrompt, fullTag) {
+    return JSON.stringify([String(rawPrompt || '').trim(), String(fullTag || '')]);
+}
+
 /**
  * 메신저 이미지 모드에 따라 AI 프롬프트 주입을 업데이트한다
  * ON: AI에게 사진 상황에서 <pic prompt="..."> 태그를 출력하도록 지시
@@ -3638,7 +3642,7 @@ function buildInlineDisplayHtml(text, senderName, extra = {}) {
     if (!mediaHtml) {
         return replaceAiSelectedEmoticons(escapeHtml(String(text || '')).replace(/\n/g, '<br>'), senderName);
     }
-    return `${textHtml}${mediaHtml}`;
+    return `<div class="slm-message-rich-content">${textHtml}${mediaHtml}</div>`;
 }
 
 async function updateRenderedMessageHtml(msgIdx, html, logLabel = '메시지') {
@@ -3708,9 +3712,21 @@ async function applyCharacterImageDisplayMode() {
         if (allowAutoImageGeneration) {
             // ── ON 모드: 이미지 생성 API로 실제 이미지 생성 (순차적 UI 업데이트) ──
             // 응답 내 <pic prompt="...">의 직접 이미지 프롬프트를 추적해 Image API로 생성
+            const unprocessedPicMatches = picMatches.filter((match) => {
+                const fullTag = match[0];
+                const rawPrompt = (match[1] || match[2] || '').trim();
+                if (!rawPrompt) return false;
+                // 같은 프롬프트라도 태그 표기(인용 부호/공백/형태)가 다르면 별도 의도로 처리해야 하므로,
+                // 오탐 중복 제거를 막기 위해 prompt+fullTag 조합 키를 사용한다.
+                const picTagKey = buildProcessedPicTagKey(rawPrompt, fullTag);
+                return !processedPicTags.has(picTagKey);
+            });
+            if (unprocessedPicMatches.length === 0) {
+                return;
+            }
             // 최대 이미지 수 제한
-            const limitedPicMatches = picMatches.slice(0, MAX_MESSENGER_IMAGES_PER_RESPONSE);
-            if (picMatches.length > MAX_MESSENGER_IMAGES_PER_RESPONSE) {
+            const limitedPicMatches = unprocessedPicMatches.slice(0, MAX_MESSENGER_IMAGES_PER_RESPONSE);
+            if (unprocessedPicMatches.length > MAX_MESSENGER_IMAGES_PER_RESPONSE) {
                 showToast(`📷 이미지 최대 ${MAX_MESSENGER_IMAGES_PER_RESPONSE}장까지 생성 가능합니다.`, 'warn', 2000);
             }
             showToast(`📷 ${limitedPicMatches.length}개 이미지 생성 중...`, 'info', 2000);
@@ -3732,7 +3748,7 @@ async function applyCharacterImageDisplayMode() {
                 const fullTag = match[0];
                 const rawPrompt = (match[1] || match[2] || '').trim();
                 const adjustedIndex = match.index + offset;
-                const picTagKey = `${rawPrompt}::${fullTag}`;
+                const picTagKey = buildProcessedPicTagKey(rawPrompt, fullTag);
 
                 let replacement;
                 if (!rawPrompt) {

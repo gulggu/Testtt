@@ -1531,7 +1531,8 @@ body[data-theme="dark"],
   height: 36px !important;
 }
 
-.slm-message-rich-content {
+.slm-message-rich-content,
+.slm-room-message-rich-content {
   display: flex;
   flex-direction: column;
   gap: 4px;
