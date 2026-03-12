@@ -2,10 +2,11 @@ import { getContext } from '../../utils/st-context.js';
 import { getDefaultBinding, getExtensionSettings, loadData, saveData } from '../../utils/storage.js';
 import { injectContext, registerContextBuilder } from '../../utils/context-inject.js';
 import { createPopup, closePopup } from '../../utils/popup.js';
-import { getAllContacts, getContacts } from '../contacts/contacts.js';
+import { getAllContacts, getAppearanceTagsByName, getContacts } from '../contacts/contacts.js';
 import { generateBackendText } from '../../utils/backend-generation.js';
-import { buildAiEmoticonContext, replaceAiSelectedEmoticons, buildEmoticonMessageHtml, buildEmoticonPickerContent, extractAiSelectedEmoticonMedia } from '../emoticon/emoticon.js';
+import { buildAiEmoticonContext, replaceAiSelectedEmoticons, buildEmoticonMessageHtml, buildEmoticonPickerContent } from '../emoticon/emoticon.js';
 import { translateTextToKorean } from '../sns/sns.js';
+import { buildDirectImagePrompt } from '../../utils/image-tag-generator.js';
 import { runSdImageGeneration } from '../../utils/slash.js';
 import { applyProfileImageStyle, normalizeProfileImageStyle, readImageFileAsDataUrl } from '../../utils/profile-image.js';
 import { escapeHtml, generateId, showConfirm, showToast } from '../../utils/ui.js';
@@ -24,10 +25,8 @@ const ROOM_ICON_DIRECT = '💬';
 const ROOM_IMAGE_ON_PROMPT = '<image_generation_rule>\nWhen the responder would realistically take and send a photo in this room, insert a <pic prompt="concise English Danbooru-style tags"> tag.\nOnly use <pic> for photos the responder could actually take with their phone.\nNo narration, mood shots, or third-person views.\nRules:\n1) <pic prompt="..."> must already be final direct image tags.\n2) Format must be exactly "scene tags | Character 1: appearance tags | Character 2: appearance tags" with the double quotes included.\n3) Use "Character N:" labels, not actual names, for appearance blocks.\n4) Use explicit count tags such as 1girl, 1boy, 2girls, 2boys; never generic people-count tags.\n5) If three or more characters appear, include group shot.\n6) Preserve any weighted tags or special syntax such as 2::tag::, -2::tag::, or 3::tag:: exactly as written.\n7) Keep core appearance tags such as hair, eyes, and outfit when they are available for included characters.\n8) No Korean, explanations, markdown, or prose.\n</image_generation_rule>';
 const ROOM_IMAGE_OFF_PROMPT = '<image_generation_rule>\nWhen the responder would realistically take and send a photo in this room, insert a <pic prompt="short Korean photo description"> tag.\nOnly use <pic> for photos the responder could actually take with their phone.\nNo narration, mood shots, or third-person views.\n</image_generation_rule>';
 const ROOM_PIC_TAG_REGEX = /<?pic\s+[^>\n]*?\bprompt\s*=\s*(?:"([^"]*)"|'([^']*)')(?:\s*\/?\s*>)?/gi;
-const ROOM_GENERATED_IMAGE_TAG_REGEX = /<img\b[^>]*\bclass\s*=\s*["'][^"']*\bslm-msg-generated-image\b[^"']*["'][^>]*>/gi;
 const ROOM_EMOTICON_ONLY_HTML_REGEX = /^<img\b[^>]*aria-label="[^"]*이모티콘[^"]*"[^>]*>$/i;
 const ROOM_EMOTICON_TOKEN_ONLY_REGEX = /^\s*\[\[\s*emoticon\s*:\s*[^\]]+\s*\]\]\s*$/i;
-const ROOM_BR_TAG_REGEX = /<br\s*\/?>/i;
 const ROOM_REPLY_TOAST_DURATION_MS = 2600;
 const ROOM_DEFAULTS = {
     autoReplyEnabled: true,
@@ -46,39 +45,6 @@ const roomAutoReplyState = new Map();
 const roomAutonomyState = new Map();
 /** 방 목록 팝업이 열려 있을 때 실시간 갱신용 렌더러 참조 */
 let _activeRoomListRenderer = null;
-
-function normalizeRoomMessageExtra(extra = {}) {
-    const source = extra && typeof extra === 'object' ? extra : {};
-    const imageSwipes = Array.isArray(source.image_swipes)
-        ? source.image_swipes.map((url) => String(url || '').trim()).filter(Boolean)
-        : [];
-    const emoticonImages = Array.isArray(source.emoticon_images)
-        ? source.emoticon_images
-            .map((item) => ({
-                name: String(item?.name || '').trim(),
-                url: String(item?.url || '').trim(),
-            }))
-            .filter((item) => item.name && item.url)
-        : [];
-    const title = String(source.title || '').trim();
-    const processedPicTags = Array.isArray(source.processed_pic_tags)
-        ? source.processed_pic_tags.map((item) => String(item || '').trim()).filter(Boolean)
-        : [];
-    return {
-        ...source,
-        image_swipes: imageSwipes,
-        image: String(source.image || imageSwipes[imageSwipes.length - 1] || '').trim(),
-        title,
-        inline_image: source.inline_image === true || imageSwipes.length > 0,
-        emoticon_images: emoticonImages,
-        processed_pic_tags: processedPicTags,
-    };
-}
-
-function hasRoomInlineMedia(message) {
-    const extra = normalizeRoomMessageExtra(message?.extra);
-    return extra.inline_image || extra.emoticon_images.length > 0;
-}
 
 function normalizeRoomBinding(binding) {
     return binding === 'character' ? 'character' : 'chat';
@@ -218,12 +184,10 @@ export function normalizeMessengerRooms(rooms = [], binding = 'chat') {
                     authorKey: String(message?.authorKey || '').trim(),
                     authorName: String(message?.authorName || '').trim(),
                     text: String(message?.text || '').trim(),
-                    rawText: String(message?.rawText || message?.text || '').trim(),
                     html: String(message?.html || '').trim(),
-                    extra: normalizeRoomMessageExtra(message?.extra),
                     timestamp: Number(message?.timestamp) || Date.now(),
                     type: String(message?.type || 'message').trim() || 'message',
-                })).filter((message) => message.text || message.html || hasRoomInlineMedia(message))
+                })).filter((message) => message.text)
                 : [];
             const name = String(room?.name || '').trim();
             const createdAt = Number(room?.createdAt) || Date.now();
@@ -416,7 +380,7 @@ function sanitizeRoomReply(text, responderName, memberLabels = []) {
     return cleaned.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim();
 }
 
-function buildRoomPlainMessageHtml(text) {
+function buildRoomMessageHtml(text, senderName) {
     const source = String(text || '');
     const escaped = escapeHtml(source);
     if (!escaped) return '';
@@ -428,86 +392,10 @@ function buildRoomPlainMessageHtml(text) {
         .split('\n')
         .map((line) => line || '&nbsp;')
         .join('<br>');
-    return paragraphs.length > 1
+    const html = paragraphs.length > 1
         ? `<div class="slm-room-message-segments">${paragraphs.map((paragraph) => `<span class="slm-room-message-segment">${renderParagraph(paragraph)}</span>`).join('')}</div>`
         : renderParagraph(escaped);
-}
-
-function buildRoomMessageHtml(text, senderName, tagReplacementMap = null) {
-    const html = buildRoomPlainMessageHtml(text);
-    if (!html) return '';
-    return replaceAiSelectedEmoticons(html, senderName, tagReplacementMap);
-}
-
-function isAllowedRoomGeneratedImageUrl(url) {
-    const normalized = String(url || '').trim();
-    if (!normalized) return false;
-    const lower = normalized.toLowerCase();
-    return /^https?:\/\//.test(lower)
-        || /^blob:/.test(lower)
-        || /^data:image\//.test(lower);
-}
-
-function buildRoomGeneratedImageTag(imageUrl, prompt = '') {
-    const normalizedUrl = String(imageUrl || '').trim();
-    if (!isAllowedRoomGeneratedImageUrl(normalizedUrl)) return '';
-    const safeUrl = escapeHtml(normalizedUrl);
-    if (!safeUrl) return '';
-    const safePrompt = escapeHtml(String(prompt || '').trim() || 'generated-image');
-    return `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image">`;
-}
-
-function readRoomImageTagAttribute(tag, attributeName) {
-    const pattern = new RegExp(`\\b${attributeName}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i');
-    const match = String(tag || '').match(pattern);
-    return String(match?.[1] || match?.[2] || '').trim();
-}
-
-function buildRoomImageTagReplacementMap(text) {
-    const source = String(text || '');
-    const replacements = new Map();
-    ROOM_GENERATED_IMAGE_TAG_REGEX.lastIndex = 0;
-    for (const match of source.matchAll(ROOM_GENERATED_IMAGE_TAG_REGEX)) {
-        const originalTag = match[0];
-        const src = readRoomImageTagAttribute(originalTag, 'src');
-        if (!src) continue;
-        const title = readRoomImageTagAttribute(originalTag, 'title')
-            || readRoomImageTagAttribute(originalTag, 'alt');
-        const safeTag = buildRoomGeneratedImageTag(src, title);
-        if (!safeTag) continue;
-        replacements.set(originalTag, safeTag);
-    }
-    return replacements;
-}
-
-function buildRoomStoredMessageHtml(text, senderName) {
-    const source = String(text || '');
-    const tagReplacementMap = buildRoomImageTagReplacementMap(source);
-    return buildRoomMessageHtml(source, senderName, tagReplacementMap);
-}
-
-function buildRoomInlineMediaHtml(extra, senderName) {
-    const normalizedExtra = normalizeRoomMessageExtra(extra);
-    const imageHtml = normalizedExtra.image_swipes.map((url, index) => {
-        const safeUrl = escapeHtml(url);
-        const safePrompt = escapeHtml(normalizedExtra.title || `generated-image-${index + 1}`);
-        return `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image">`;
-    }).join('');
-    const emoticonHtml = normalizedExtra.emoticon_images
-        .map((emoticon) => buildEmoticonMessageHtml(emoticon, senderName))
-        .filter(Boolean)
-        .join('');
-    const mediaHtml = `${imageHtml}${emoticonHtml}`.trim();
-    if (!mediaHtml) return '';
-    return `<div class="slm-room-message-inline-media">${mediaHtml}</div>`;
-}
-
-function buildRoomInlineMessageHtml(message, senderName) {
-    const normalizedExtra = normalizeRoomMessageExtra(message?.extra);
-    const textHtml = buildRoomStoredMessageHtml(String(message?.text || message?.rawText || ''), senderName);
-    const mediaHtml = buildRoomInlineMediaHtml(normalizedExtra, senderName);
-    if (!mediaHtml) return textHtml;
-    return `<div class="slm-room-message-rich-content">${[textHtml, mediaHtml].filter(Boolean).join('')}</div>`;
+    return replaceAiSelectedEmoticons(html, senderName);
 }
 
 function isSegmentedRoomMessageHtml(html) {
@@ -564,10 +452,7 @@ function formatRelativeTime(timestamp) {
 function appendRoomMessage(room, message) {
     const nextRoom = {
         ...room,
-        messages: [...room.messages, {
-            ...message,
-            extra: normalizeRoomMessageExtra(message?.extra),
-        }].slice(-ROOM_MESSAGE_STORAGE_LIMIT),
+        messages: [...room.messages, message].slice(-ROOM_MESSAGE_STORAGE_LIMIT),
         updatedAt: Number(message?.timestamp) || Date.now(),
     };
     return upsertMessengerRoom(nextRoom);
@@ -584,7 +469,6 @@ function replaceRoomMessage(roomId, messageId, updater) {
         return {
             ...message,
             ...(updated && typeof updated === 'object' ? updated : {}),
-            extra: normalizeRoomMessageExtra((updated && typeof updated === 'object' && 'extra' in updated) ? updated.extra : message?.extra),
         };
     });
     return upsertMessengerRoom({
@@ -1082,42 +966,46 @@ async function generateRoomMessageImageViaApi(imagePrompt) {
 
 async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
     const settings = getRoomImageSettings();
+    const allContactsList = getAllContacts();
     const normalizedSource = normalizeQuotesForRoomPicTag(String(rawText || ''));
     let processedText = normalizedSource;
-    const imageSwipes = [];
-    const processedPicTags = [];
-    let lastImagePrompt = '';
+    const imagePlaceholders = new Map();
+    let imageCounter = 0;
+    const transcript = buildRoomTranscript(room, candidateMap);
+    const userName = String(getContext()?.name1 || '').trim();
     ROOM_PIC_TAG_REGEX.lastIndex = 0;
     const picMatches = [...normalizedSource.matchAll(ROOM_PIC_TAG_REGEX)];
     if (picMatches.length > 0) {
         const replacements = [];
-        for (const [matchIdx, match] of picMatches.entries()) {
+        for (const match of picMatches.slice(0, 3)) {
             const fullTag = match[0];
             const rawPrompt = String(match[1] || match[2] || '').trim();
             let replacement = '';
-            let generatedInlineImage = false;
             if (rawPrompt) {
-                if (settings.messageImageGenerationMode && matchIdx < 3) {
-                    const imageUrl = await generateRoomMessageImageViaApi(rawPrompt);
-                    if (imageUrl && isAllowedRoomGeneratedImageUrl(imageUrl)) {
-                        imageSwipes.push(imageUrl);
-                        processedPicTags.push(fullTag);
-                        lastImagePrompt = rawPrompt;
-                        generatedInlineImage = true;
-                    } else if (imageUrl) {
-                        console.warn('[ST-LifeSim] 메신저 방 이미지 URL 형식 거부됨:', String(imageUrl).slice(0, 120));
-                    } else {
-                        console.warn('[ST-LifeSim] 메신저 방 이미지 생성 실패:', {
-                            senderName,
-                            rawPrompt: String(rawPrompt).slice(0, 120),
-                        });
+                if (settings.messageImageGenerationMode) {
+                    const includeNames = [senderName];
+                    collectMentionedRoomContactNames(`${transcript}\n${rawPrompt}`, allContactsList).forEach((name) => {
+                        if (name && !includeNames.includes(name)) includeNames.push(name);
+                    });
+                    const userHintRegex = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
+                    if (userName && userHintRegex.test(rawPrompt.toLowerCase())) includeNames.push(userName);
+                    const tagResult = buildDirectImagePrompt(rawPrompt, {
+                        includeNames,
+                        contacts: allContactsList,
+                        getAppearanceTagsByName,
+                        tagWeight: settings.tagWeight,
+                    });
+                    const imageUrl = tagResult.finalPrompt ? await generateRoomMessageImageViaApi(tagResult.finalPrompt) : '';
+                    if (imageUrl) {
+                        const safeUrl = escapeHtml(imageUrl);
+                        const safePrompt = escapeHtml(rawPrompt);
+                        const placeholder = `__ROOM_IMG_${imageCounter++}__`;
+                        imagePlaceholders.set(placeholder, `<img src="${safeUrl}" title="${safePrompt}" alt="${safePrompt}" class="slm-msg-generated-image" style="max-width:100%;border-radius:var(--slm-image-radius,10px);margin:4px 0">`);
+                        replacement = placeholder;
                     }
                 }
                 if (!replacement) {
                     replacement = settings.messageImageTextTemplate.replace(/\{description\}/g, rawPrompt);
-                }
-                if (generatedInlineImage) {
-                    replacement = '';
                 }
             }
             replacements.push({ index: match.index, length: fullTag.length, replacement });
@@ -1131,27 +1019,19 @@ async function enrichRoomReplyContent(rawText, senderName, room, candidateMap) {
             });
         }
     }
-    const fallbackText = normalizeRoomPromptText(processedText || rawText);
-    const emoticonMedia = extractAiSelectedEmoticonMedia(fallbackText, senderName);
-    const plainText = String(emoticonMedia.text || fallbackText).trim();
-    const extra = normalizeRoomMessageExtra({
-        image_swipes: imageSwipes,
-        image: imageSwipes[imageSwipes.length - 1] || '',
-        title: lastImagePrompt,
-        inline_image: imageSwipes.length > 0,
-        processed_pic_tags: processedPicTags,
-        emoticon_images: emoticonMedia.emoticons,
+    let html = buildRoomMessageHtml(processedText, senderName);
+    imagePlaceholders.forEach((imageHtml, placeholder) => {
+        html = html.replace(new RegExp(placeholder, 'g'), imageHtml);
     });
-    const hasInlineMedia = hasRoomInlineMedia({ extra });
-    const normalizedText = plainText || normalizeRoomPromptText(rawText);
-    // inline 미디어가 있으면 HTML 문자열을 저장하지 않고,
-    // renderRoomMessageBubbleContent가 text + extra 메타데이터로 다시 렌더링한다.
-    const html = hasInlineMedia ? '' : buildRoomStoredMessageHtml(normalizedText, senderName);
+    const plainText = processedText
+        .replace(/__ROOM_IMG_\d+__/g, ' [사진] ')
+        .split('\n')
+        .map((line) => line.replace(/\s+/g, ' ').trim())
+        .join('\n')
+        .trim();
     return {
-        text: normalizedText,
-        html: html !== normalizedText ? html : '',
-        extra,
-        rawText: normalizedSource,
+        text: plainText || normalizeRoomPromptText(rawText),
+        html: html !== plainText ? html : '',
     };
 }
 
@@ -1304,8 +1184,6 @@ async function runRoomAutoReplies(roomId, onUpdate = null, options = {}) {
                         authorName: getMemberDisplayLabel(responderKey, candidateMap),
                         text: reply.text,
                         html: reply.html || '',
-                        extra: reply.extra,
-                        rawText: reply.rawText || reply.text,
                         timestamp: Date.now(),
                         type: 'message',
                     });
@@ -1359,22 +1237,14 @@ function buildAvatarElement(memberKey, candidateMap) {
 
 function renderRoomMessageBubbleContent(message, bubble) {
     if (!bubble) return;
-    const senderName = String(message?.authorName || getContext()?.name1 || '{{user}}').trim() || '{{user}}';
-    const extra = normalizeRoomMessageExtra(message?.extra);
-    if (hasRoomInlineMedia({ extra })) {
-        const inlineHtml = buildRoomInlineMessageHtml(message, senderName);
-        bubble.innerHTML = inlineHtml;
-        bubble.classList.remove('multiline');
-        bubble.classList.toggle('emoticon-only', isEmoticonOnlyRoomMessageHtml(inlineHtml));
-        return;
-    }
     if (message?.html) {
         bubble.innerHTML = message.html;
         bubble.classList.toggle('multiline', isSegmentedRoomMessageHtml(message.html));
         bubble.classList.toggle('emoticon-only', isEmoticonOnlyRoomMessageHtml(message.html));
         return;
     }
-    const html = buildRoomStoredMessageHtml(String(message?.text || message?.rawText || ''), senderName);
+    const senderName = String(message?.authorName || getContext()?.name1 || '{{user}}').trim() || '{{user}}';
+    const html = buildRoomMessageHtml(String(message?.text || ''), senderName);
     bubble.innerHTML = html;
     bubble.classList.toggle('multiline', isSegmentedRoomMessageHtml(html));
     bubble.classList.toggle('emoticon-only', isEmoticonOnlyRoomMessageHtml(html));
@@ -1392,7 +1262,7 @@ function openRoomMessageEditPopup(roomId, messageId, onBack, onSaved) {
     const input = document.createElement('textarea');
     input.className = 'slm-textarea';
     input.rows = 5;
-    input.value = message.rawText || message.text || '';
+    input.value = message.text || '';
     wrapper.appendChild(input);
 
     const footer = document.createElement('div');
@@ -1430,8 +1300,6 @@ function openRoomMessageEditPopup(roomId, messageId, onBack, onSaved) {
             replaceRoomMessage(roomId, messageId, {
                 text: enriched?.text || nextText,
                 html: enriched?.html || '',
-                extra: enriched?.extra,
-                rawText: enriched?.rawText || nextText,
             });
             close();
             onSaved?.();
@@ -1956,7 +1824,6 @@ function openMessengerRoomDetail(roomId, onBack) {
             authorName: String(getContext()?.name1 || '{{user}}').trim() || '{{user}}',
             text: String(payload?.text || '').trim(),
             html: String(payload?.html || '').trim(),
-            extra: payload?.extra,
             timestamp: Date.now(),
             type: 'message',
         });
@@ -2206,10 +2073,10 @@ function buildRoomListContent(onBack, initialRoomId = null) {
  * 외부(index.js 등)에서 특정 방에 메시지를 추가한다.
  * 채팅창(/sendas)을 거치지 않고 방 데이터에만 저장하여 채팅창 노출을 방지한다.
  * @param {string} roomId
- * @param {{ authorName: string, text: string, html?: string, extra?: object, rawText?: string }} payload
+ * @param {{ authorName: string, text: string, html?: string }} payload
  * @returns {Object|null} 갱신된 방 객체
  */
-export function appendExternalRoomMessage(roomId, { authorName, text, html = '', extra = null, rawText = '' }) {
+export function appendExternalRoomMessage(roomId, { authorName, text, html = '' }) {
     const room = getMessengerRoomById(roomId);
     if (!room) return null;
     const candidateMap = getCandidateMap();
@@ -2225,8 +2092,6 @@ export function appendExternalRoomMessage(roomId, { authorName, text, html = '',
         authorName: trimmedAuthor,
         text: String(text || '').trim(),
         html: String(html || '').trim(),
-        extra,
-        rawText: String(rawText || text || '').trim(),
         timestamp: Date.now(),
         type: 'message',
     });

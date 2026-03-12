@@ -56,24 +56,6 @@ const EMOTICON_SEARCH_DEBOUNCE_MS = 90;
 let emoticonCache = null;
 let categoryVisibilityCache = null;
 
-function applyTagReplacementMode(text, tagReplacementMap) {
-    let source = String(text || '');
-    const replacementEntries = tagReplacementMap instanceof Map
-        ? [...tagReplacementMap.entries()]
-        : (Array.isArray(tagReplacementMap) ? tagReplacementMap : []);
-    if (replacementEntries.length === 0) return source;
-    replacementEntries.forEach((entry) => {
-        const originalTag = Array.isArray(entry) ? entry[0] : '';
-        const replacementHtml = Array.isArray(entry) ? entry[1] : '';
-        const targetTag = String(originalTag || '').trim();
-        const replacement = String(replacementHtml || '');
-        if (!targetTag || !replacement) return;
-        const escapedTargetTag = escapeHtml(targetTag);
-        source = source.replace(escapedTargetTag, replacement);
-    });
-    return source;
-}
-
 /**
  * @typedef {Object} Emoticon
  * @property {string} id
@@ -256,89 +238,6 @@ function resolveAiEmoticonHtmlMap(senderName) {
     return htmlMap;
 }
 
-function resolveAiEmoticonDataMap(senderName) {
-    const dataMap = new Map();
-    getAiEmoticonChoices(senderName).forEach((emoticon) => {
-        const normalizedName = normalizeEmoticonName(emoticon.name).toLowerCase();
-        const emoticonName = normalizeEmoticonName(emoticon.name);
-        const emoticonUrl = String(emoticon.url || '').trim();
-        if (!normalizedName || !emoticonName || !emoticonUrl) return;
-        dataMap.set(normalizedName, {
-            name: emoticonName,
-            url: emoticonUrl,
-        });
-    });
-    return dataMap;
-}
-
-function normalizeAiEmoticonTokenName(rawName) {
-    const normalizedSource = normalizeEmoticonName(rawName)
-        .replace(/^\[\[\s*emoticon\s*:\s*([^\]]+?)\s*\]\]$/i, '$1')
-        .replace(/^<\s*emoticon\s*:\s*([^>]+?)\s*>$/i, '$1')
-        .replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '');
-    if (!isSafeEmoticonTokenName(normalizedSource)) return '';
-    const numberedName = normalizedSource.replace(/^\d+\s*[-\].):]+\s*/, '').trim();
-    return normalizeEmoticonName(numberedName || normalizedSource).toLowerCase();
-}
-
-function dedupeEmoticonMedia(items = []) {
-    const seen = new Set();
-    return items.filter((item) => {
-        const name = normalizeEmoticonName(item?.name).toLowerCase();
-        const url = String(item?.url || '').trim();
-        const key = `${name}::${url}`;
-        if (!name || !url || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
-}
-
-/**
- * AI가 출력한 "단독 이모티콘 줄"을 별도 미디어 데이터로 추출한다.
- * 본문 중간에 섞인 토큰은 기존 문자열 치환 경로를 유지하기 위해 남겨둔다.
- * @param {string} text
- * @param {string} senderName
- * @returns {{ text: string, emoticons: Array<{name: string, url: string}> }}
- */
-export function extractAiSelectedEmoticonMedia(text, senderName = '{{char}}') {
-    const source = String(text || '');
-    if (!source.trim()) return { text: source, emoticons: [] };
-    const dataMap = resolveAiEmoticonDataMap(senderName);
-    if (dataMap.size === 0) return { text: source, emoticons: [] };
-
-    const extracted = [];
-    const keptLines = source.split('\n').map((line) => {
-        const trimmedLine = line.trim();
-        if (!trimmedLine) return line;
-
-        const directName = normalizeAiEmoticonTokenName(trimmedLine);
-        const directMatch = directName ? dataMap.get(directName) : null;
-        if (directMatch) {
-            extracted.push(directMatch);
-            return '';
-        }
-
-        const bulletMatch = trimmedLine.match(AI_EMOTICON_BULLET_LINE_REGEX);
-        if (!bulletMatch) return line;
-        const bulletName = normalizeAiEmoticonTokenName(bulletMatch[1]);
-        const bulletData = bulletName ? dataMap.get(bulletName) : null;
-        if (!bulletData) return line;
-        extracted.push(bulletData);
-        return '';
-    });
-
-    const cleanedText = keptLines
-        .join('\n')
-        .replace(/\n{3,}/g, '\n\n')
-        .replace(/[ \t]+\n/g, '\n')
-        .trim();
-
-    return {
-        text: extracted.length > 0 ? cleanedText : source,
-        emoticons: dedupeEmoticonMedia(extracted),
-    };
-}
-
 /**
  * AI가 선택한 이모티콘 토큰을 실제 이모티콘 HTML로 변환한다.
  * 지원 형식:
@@ -348,18 +247,22 @@ export function extractAiSelectedEmoticonMedia(text, senderName = '{{char}}') {
  * - 메시지 한 줄이 "• 이름" 같은 bullet 형식인 경우
  * @param {string} text
  * @param {string} senderName
- * @param {Map<string, string>|Array<[string, string]>|null} tagReplacementMap
  * @returns {string}
  */
-export function replaceAiSelectedEmoticons(text, senderName = '{{char}}', tagReplacementMap = null) {
-    const source = applyTagReplacementMode(text, tagReplacementMap);
+export function replaceAiSelectedEmoticons(text, senderName = '{{char}}') {
+    const source = String(text || '');
     if (!source.trim()) return source;
     const htmlMap = resolveAiEmoticonHtmlMap(senderName);
     if (htmlMap.size === 0) return source;
 
     const resolveToken = (rawName) => {
-        const normalizedName = normalizeAiEmoticonTokenName(rawName);
-        if (!normalizedName) return null;
+        const normalizedSource = normalizeEmoticonName(rawName)
+            .replace(/^\[\[\s*emoticon\s*:\s*([^\]]+?)\s*\]\]$/i, '$1')
+            .replace(/^<\s*emoticon\s*:\s*([^>]+?)\s*>$/i, '$1')
+            .replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '');
+        if (!isSafeEmoticonTokenName(normalizedSource)) return null;
+        const numberedName = normalizedSource.replace(/^\d+\s*[-\].):]+\s*/, '').trim();
+        const normalizedName = normalizeEmoticonName(numberedName || normalizedSource).toLowerCase();
         return htmlMap.get(normalizedName) || null;
     };
 
