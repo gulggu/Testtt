@@ -3544,14 +3544,11 @@ const MESSAGE_RENDER_WAIT_ATTEMPTS = 6;
 const MESSAGE_RENDER_RETRY_DELAY_FAST = 50;
 const MESSAGE_RENDER_RETRY_DELAY_SLOW = 120;
 const GENERATED_INLINE_MEDIA_TAG_REGEX_SOURCE = '<img\\b[^>]*(?:data-slm-pic-id|data-slm-emoticon)[^>]*>';
+// Delay to allow the DOM to settle after MESSAGE_RENDERED / MESSAGE_UPDATED before post-processing (ms).
 const GENERATED_IMAGE_POST_PROCESSING_DELAY_MS = 120;
+// Re-apply post-processing only to the most recent N messages on chat/character entry to limit overhead.
 const RECENT_GENERATED_IMAGE_POST_PROCESSING_WINDOW = 12;
-// 이미지 프롬프트가 영어/한국어로 {{user}} 동행을 암시하는 표현을 감지한다.
-const MESSAGE_IMAGE_USER_HINT_REGEX = /\buser\b|{{user}}|유저|너|당신|with user|together|둘이|함께/;
 const GENERATED_MESSAGE_IMAGE_WRAPPER_CLASS = 'slm-generated-image-wrapper';
-const GENERATED_MESSAGE_IMAGE_CONTROLS_CLASS = 'slm-generated-image-controls';
-const GENERATED_MESSAGE_IMAGE_REROLL_CLASS = 'slm-generated-image-reroll';
-const GENERATED_MESSAGE_IMAGE_REROLL_BUTTON_CLASSES = `${GENERATED_MESSAGE_IMAGE_REROLL_CLASS} right_menu_button fa-solid fa-rotate interactable`;
 
 function createGeneratedInlineMediaTagRegex() {
     return new RegExp(GENERATED_INLINE_MEDIA_TAG_REGEX_SOURCE, 'gi');
@@ -3766,86 +3763,6 @@ async function syncEscapedGeneratedMedia(msgIdx, logLabel = '메시지') {
     return false;
 }
 
-function replaceGeneratedMessageImageTag(messageText, imageId, imageUrl, prompt) {
-    const source = String(messageText || '');
-    const normalizedImageId = String(imageId || '').trim();
-    if (!source || !normalizedImageId || !imageUrl) return source;
-    const escapedImageId = escapeRegex(normalizedImageId);
-    const targetRegex = new RegExp(`<img\\b(?=[^>]*\\bdata-slm-pic-id="${escapedImageId}")[^>]*>`, 'i');
-    if (!targetRegex.test(source)) return source;
-    return source.replace(targetRegex, buildGeneratedMessageImageHtml(imageUrl, prompt, { imageId: normalizedImageId }));
-}
-
-function buildGeneratedImageRerollOptions(rawPrompt, charName, messageIndex) {
-    const settings = getSettings();
-    const ctx = getContext();
-    const prompt = String(rawPrompt || '').trim();
-    const resolvedCharName = String(charName || ctx?.name2 || '{{char}}');
-    const userName = ctx?.name1 || '';
-    const allContactsList = [...getContacts('character'), ...getContacts('chat')];
-    const includeNames = [];
-    const forceIncludeNames = [resolvedCharName];
-    const startIndex = Number.isFinite(messageIndex)
-        ? Math.max(0, messageIndex - IMAGE_INTENT_CONTEXT_WINDOW)
-        : Math.max(0, (ctx?.chat?.length || 0) - IMAGE_INTENT_CONTEXT_WINDOW);
-    const endIndex = Number.isFinite(messageIndex) ? messageIndex + 1 : (ctx?.chat?.length || 0);
-    const recentContextText = (Array.isArray(ctx?.chat) ? ctx.chat : [])
-        .slice(startIndex, endIndex)
-        .map(m => String(m?.mes || ''))
-        .join('\n');
-    collectMentionedContactNames(`${recentContextText}\n${prompt}`, allContactsList).forEach((name) => {
-        if (name && !forceIncludeNames.includes(name) && !includeNames.includes(name)) includeNames.push(name);
-    });
-    if (userName && MESSAGE_IMAGE_USER_HINT_REGEX.test(prompt) && !forceIncludeNames.includes(userName)) {
-        forceIncludeNames.push(userName);
-    }
-    return {
-        settings,
-        includeNames,
-        forceIncludeNames,
-        contacts: allContactsList,
-        charName: resolvedCharName,
-    };
-}
-
-async function rerollGeneratedMessageImage(messageIndex, imageId, prompt) {
-    const msgIdx = Number(messageIndex);
-    const rawPrompt = String(prompt || '').trim();
-    const normalizedImageId = String(imageId || '').trim();
-    if (!Number.isFinite(msgIdx) || msgIdx < 0 || !rawPrompt || !normalizedImageId) return;
-
-    const ctx = getContext();
-    const message = ctx?.chat?.[msgIdx];
-    if (!ctx || !message || message.is_user) return;
-
-    showToast('📷 이미지를 다시 생성하는 중...', 'info', 1600);
-    try {
-        const rerollOptions = buildGeneratedImageRerollOptions(rawPrompt, message.name, msgIdx);
-        const result = await processMessengerImageGeneration(rawPrompt, rerollOptions);
-        if (!result.imageUrl) {
-            showToast('이미지를 다시 생성하지 못했습니다.', 'warn', 2200);
-            return;
-        }
-
-        const updatedMes = replaceGeneratedMessageImageTag(message.mes, normalizedImageId, result.imageUrl, rawPrompt);
-        if (updatedMes === message.mes) {
-            showToast('교체할 원본 이미지를 찾지 못했습니다.', 'warn', 2200);
-            return;
-        }
-
-        message.mes = updatedMes;
-        await refreshRenderedMessage(msgIdx, message, null, '이미지 재생성', { syncEscapedMediaOnly: true });
-        if (typeof ctx.saveChat === 'function') {
-            await ctx.saveChat();
-        }
-        await emitMessageRenderLifecycle(ctx, msgIdx);
-        showToast('📷 이미지를 다시 생성했습니다.', 'success', 1800);
-    } catch (err) {
-        console.error('[ST-LifeSim] 생성 이미지 재생성 오류:', err);
-        showToast('이미지 재생성 중 오류가 발생했습니다.', 'error', 2200);
-    }
-}
-
 function attachGeneratedMessageImagePostProcessing(msgIdx) {
     const numericMsgIdx = Number(msgIdx);
     if (!Number.isFinite(numericMsgIdx) || numericMsgIdx < 0) return false;
@@ -3861,32 +3778,13 @@ function attachGeneratedMessageImagePostProcessing(msgIdx) {
     let attachedCount = 0;
     generatedImages.forEach((image) => {
         if (image.closest(`.${GENERATED_MESSAGE_IMAGE_WRAPPER_CLASS}`)) return;
-        // buildGeneratedMessageImageHtml가 title/alt 모두 같은 프롬프트로 기록하므로
-        // title을 우선 사용하되 오래된/변형된 태그도 alt로 복구할 수 있게 한다.
-        const prompt = String(image.getAttribute('title') || image.getAttribute('alt') || '').trim();
-        const imageId = String(image.getAttribute('data-slm-pic-id') || '').trim();
         const src = String(image.getAttribute('src') || '').trim();
-        if (!imageId || !prompt || !isSafeGeneratedMediaSrc(src)) return;
+        if (!isSafeGeneratedMediaSrc(src)) return;
 
         const wrapper = document.createElement('div');
         wrapper.className = GENERATED_MESSAGE_IMAGE_WRAPPER_CLASS;
         image.parentNode?.insertBefore(wrapper, image);
         wrapper.appendChild(image);
-
-        const controls = document.createElement('div');
-        controls.className = GENERATED_MESSAGE_IMAGE_CONTROLS_CLASS;
-
-        const rerollButton = document.createElement('button');
-        rerollButton.type = 'button';
-        rerollButton.className = GENERATED_MESSAGE_IMAGE_REROLL_BUTTON_CLASSES;
-        rerollButton.setAttribute('title', 'Generate Another Image');
-        rerollButton.setAttribute('aria-label', 'Generate Another Image');
-        rerollButton.dataset.msgIdx = String(numericMsgIdx);
-        rerollButton.dataset.prompt = prompt;
-        rerollButton.dataset.imageId = imageId;
-        controls.appendChild(rerollButton);
-
-        wrapper.appendChild(controls);
         attachedCount += 1;
     });
     return attachedCount > 0;
@@ -3899,7 +3797,7 @@ function scheduleGeneratedMessageImagePostProcessing(msgIdx) {
         try {
             attachGeneratedMessageImagePostProcessing(numericMsgIdx);
         } catch (err) {
-            console.error('[ST-LifeSim] 생성 이미지 후처리 오류:', err);
+            console.error('[ST-LifeSim] Generated image post-processing error:', err);
         }
     }, GENERATED_IMAGE_POST_PROCESSING_DELAY_MS);
 }
@@ -4421,20 +4319,6 @@ async function initIfNeeded() {
     if (initialized || initializing) return;
     initializing = true;
     try { initialized = await init(); } catch (e) { console.error('[ST-LifeSim] 초기화 오류:', e); } finally { initializing = false; }
-}
-
-document.addEventListener('click', (event) => {
-    const rerollButton = event.target instanceof Element
-        ? event.target.closest(`.${GENERATED_MESSAGE_IMAGE_REROLL_CLASS}`)
-        : null;
-    if (!rerollButton) return;
-    event.preventDefault();
-    event.stopPropagation();
-    void rerollGeneratedMessageImage(
-        Number(rerollButton.dataset.msgIdx),
-        rerollButton.dataset.imageId,
-        rerollButton.dataset.prompt,
-    );
 });
 
 // SillyTavern APP_READY 이벤트에서 초기화 실행 (호환성 위해 즉시 시도도 함께 수행)
